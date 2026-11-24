@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
@@ -186,6 +187,8 @@ private fun GameDetailScreen(lib: LibraryState, port: PortState,
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
     var removal by remember { mutableStateOf<RemovalRequest?>(null) }
+    // 删除存档：等玩家确认（删的是游戏自己的进度，不可恢复）
+    var pendingDelete by remember { mutableStateOf(false) }
     // 可移动卡（SD 卡）上 App 自己的端口目录：插着才有
     val cardDirs = remember { StorageVolumes.removablePortsDirs(context) }
     // 搬移：等玩家确认的目标目录（null = 没有要搬的）
@@ -357,6 +360,21 @@ private fun GameDetailScreen(lib: LibraryState, port: PortState,
         }
     }
 
+    /** 确认之后真的删存档：删掉活存档与设备存档（删掉了没有由存档那边说了算） */
+    fun doDeleteSave() {
+        // 存档按数据包清单里的 title id 分着（导出、导入用的是同一个）
+        val id = ported?.titleId ?: titleId
+        scope.launch {
+            val r = saveRepository.erase(id)
+            r.onSuccess { removed ->
+                actions.onToast(
+                    if (removed) locale.str(R.string.lib_deleted) else locale.str(R.string.lib_no_saves))
+            }.onFailure {
+                actions.onToast(locale.str(R.string.lib_delete_failed, failureText(locale, it)))
+            }
+        }
+    }
+
     /** 真的导出（后台线程：卡上写入很慢） */
     fun doExport(target: File) {
         exporting = true
@@ -508,6 +526,12 @@ private fun GameDetailScreen(lib: LibraryState, port: PortState,
                                     onClick = { menuOpen = false; askRemoval(Removal.CACHE) },
                                 )
                             }
+                            // 删除存档：只删游戏自己的进度，数据包与游戏文件不动
+                            DropdownMenuItem(
+                                text = { Text(locale.str(R.string.lib_delete_saves), color = NxPalette.Danger) },
+                                leadingIcon = { Icon(Icons.Filled.DeleteForever, null, Modifier.size(18.dp), tint = NxPalette.Danger) },
+                                onClick = { menuOpen = false; pendingDelete = true },
+                            )
                             if (e.isImported) {
                                 // 移出：只忘路径，那个文件夹里的文件原地不动（那是玩家的文件）
                                 DropdownMenuItem(
@@ -623,6 +647,23 @@ private fun GameDetailScreen(lib: LibraryState, port: PortState,
             }
         }
         }
+    }
+
+    // 删除存档的确认框：写明后果（不可恢复），并指向导出入口
+    if (pendingDelete) {
+        AlertDialog(
+            onDismissRequest = { pendingDelete = false },
+            title = { Text(locale.str(R.string.lib_delete_confirm)) },
+            text = { Text(locale.str(R.string.lib_delete_confirm_body), style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = { pendingDelete = false; doDeleteSave() }) {
+                    Text(locale.str(R.string.lib_delete_saves), color = NxPalette.Danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = false }) { Text(locale.str(R.string.common_cancel)) }
+            },
+        )
     }
 
     // 搬移的确认框：写明后果（拔卡后不能玩、卸载会连同删掉它）

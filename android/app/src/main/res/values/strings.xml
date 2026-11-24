@@ -552,7 +552,12 @@
     <string name="lib_import_saves">Import the saves…</string>
     <string name="lib_other_games_save">That save belongs to another game (%1$s); it was not imported</string>
     <string name="lib_import_confirm">Import this save?</string>
-    <string name="lib_import_confirm_body">%1$s\n\nYour current progress will be replaced, and it cannot be brought back.</string>
+    <string name="lib_import_confirm_body">%1$s\n\nImporting will replace all current save data, and it cannot be brought back. Save data from other emulators or consoles may contain content this environment cannot read, which may prevent the game from starting. It is recommended to export the current save data as a backup before importing.</string>
+    <string name="lib_delete_saves">Delete the saves</string>
+    <string name="lib_delete_confirm">Delete the save data?</string>
+    <string name="lib_delete_confirm_body">All save data for this game will be deleted, and it cannot be brought back. To keep the current progress, export the save data first.</string>
+    <string name="lib_deleted">Deleted</string>
+    <string name="lib_delete_failed">The save data could not be deleted: %1$s</string>
     <string name="picker_no_files">There are no files here</string>
     <string name="picker_no_game_files">No game files with a known extension</string>
     <string name="picker_pick_file">Pick this file</string>

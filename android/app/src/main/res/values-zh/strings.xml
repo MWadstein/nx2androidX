@@ -551,7 +551,12 @@
     <string name="lib_import_saves">导入存档…</string>
     <string name="lib_other_games_save">这是别的游戏的存档（%1$s），没有导入</string>
     <string name="lib_import_confirm">导入这份存档？</string>
-    <string name="lib_import_confirm_body">%1$s\n\n换进去之后，现在的进度会被覆盖，而且找不回来。</string>
+    <string name="lib_import_confirm_body">%1$s\n\n导入将替换当前的全部存档数据，此操作不可恢复。来自其他模拟器或主机的存档可能包含当前环境无法识别的内容，可能导致游戏无法正常启动。建议先执行「导出存档」备份当前进度，再继续导入。</string>
+    <string name="lib_delete_saves">删除存档</string>
+    <string name="lib_delete_confirm">删除存档？</string>
+    <string name="lib_delete_confirm_body">将删除该游戏的全部存档数据，此操作不可恢复。如需保留当前进度，请先执行「导出存档」。</string>
+    <string name="lib_deleted">已删除</string>
+    <string name="lib_delete_failed">存档没有删除成功：%1$s</string>
     <string name="picker_no_files">这里没有文件</string>
     <string name="picker_no_game_files">没有符合后缀的游戏文件</string>
     <string name="picker_pick_file">选定此文件</string>
