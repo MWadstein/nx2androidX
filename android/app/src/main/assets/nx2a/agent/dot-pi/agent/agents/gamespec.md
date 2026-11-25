@@ -34,6 +34,14 @@ for the player.
   - the task names the pack's folder; if it does not, read it from `$NX2A_HOME/library.json`
 - the engine tree: `$NX2A_REPO/nxnative` (the host's Android side is `$NX2A_REPO/nxnative/dm/android`)
 - the tools: `$NX2A_REPO/tools/` (run them with python3)
+- **rebuilding the host after your fix** (the phone is the porter, it compiles with the
+  player's own NDK):
+  ```sh
+  python3 -m porter host --package <the pack's "package" from nx2a-data.json> --jobs 8
+  ```
+  the game's own runtime instead: `python3 -m porter rebuild-runtime <the pack folder> --jobs 8`.
+  The build lands in `files/runtimes/<title ID>/` and the next run of the game uses it.
+  Do not dig through the porter's Python for these two - they are the ones.
 - if the title ID in your task and the pack you find do not belong to the same game, say so
   in your answer and stop - a case on the wrong game is worse than no case
 
