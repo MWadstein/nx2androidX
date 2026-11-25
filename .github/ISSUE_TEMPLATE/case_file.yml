@@ -4,15 +4,16 @@ title: "[Case]: "
 labels: ["case file"]
 body:
   - type: markdown
-    value: |
-      The app's assistant worked a game over and the export button packed that work into a zip.
-      This is where the zip lands: the diff in it can be read, applied and landed in the repository,
-      and the case's author gets the credit.
+    attributes:
+      value: |
+        The app's assistant worked a game over and the export button packed that work into a zip.
+        This is where the zip lands: the diff in it can be read, applied and landed in the repository,
+        and the case's author gets the credit.
 
-      The zip is on the phone in Download/nx2android/gamespec/ — drag it into the attachment field
-      below. It holds the case document (spec.md), the files that were changed, the manifest
-      (fix.md) and the diff (diff.patch). It cannot hold game files or keys: the packer refuses
-      them.
+        The zip is on the phone in Download/nx2android/gamespec/ — drag it into the attachment field
+        below. It holds the case document (spec.md), the files that were changed, the manifest
+        (fix.md) and the diff (diff.patch). It cannot hold game files or keys: the packer refuses
+        them.
 
   - type: input
     id: game
