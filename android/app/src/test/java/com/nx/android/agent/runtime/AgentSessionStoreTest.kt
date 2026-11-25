@@ -39,10 +39,12 @@ class AgentSessionStoreTest {
     }
 
     @Test
-    fun `an old pointer value is just an opaque string`() {
+    fun `an old pointer value points at nothing`() {
+        // the pointer names a session file; a session id from an older version names no file,
+        // so there is no session the app can point at
         val dir = folder.newFolder("sessions")
         File(dir, "_active").writeText("s-1795305443005")
-        assertEquals("s-1795305443005", AgentSessionStore(dir).activePath())
+        assertNull(AgentSessionStore(dir).activePath())
     }
 
     @Test
