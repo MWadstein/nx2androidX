@@ -149,6 +149,13 @@ file (the problem entry with what is known, what is not, and what the next measu
 should be) and answer the main session. A half-answer that is written down can be picked
 up; an answer that never comes cannot.
 
+Write the case file as you go, not at the end: every twenty tool calls, and every plan
+item you finish, put one line in the case file - what is done, what is next. A run that
+dies without a line in the case file has to be reconstructed by the next one, and the
+next one reconstructs it by diffing the tree (slow, and it guesses). On 2026-11-25 a
+worker ran 86 tool calls without a line in the case file: three runs had to take the
+work over, and each of them worked out what had changed from the tree.
+
 ## Fix phase (only when the task says the player has confirmed)
 1. Read the entry marked "(status: pending approval)" or "(status: in progress)" in the case
    file and fix exactly that - do not invent a different approach. It carries the plan:
