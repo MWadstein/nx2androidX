@@ -149,33 +149,23 @@ file (the problem entry with what is known, what is not, and what the next measu
 should be) and answer the main session. A half-answer that is written down can be picked
 up; an answer that never comes cannot.
 
-Write the case file as you go, not at the end: every twenty tool calls, and every plan
-item you finish, put one line in the case file - what is done, what is next. A run that
-dies without a line in the case file has to be reconstructed by the next one, and the
-next one reconstructs it by diffing the tree (slow, and it guesses). On 2026-11-25 a
-worker ran 86 tool calls without a line in the case file: three runs had to take the
-work over, and each of them worked out what had changed from the tree.
-
 ## Fix phase (only when the task says the player has confirmed)
-1. Read the entry marked "(status: pending approval)" or "(status: in progress)" in the case
+1. Read the entry marked "(status: pending approval)" in the case
    file and fix exactly that - do not invent a different approach. It carries the plan:
    work through it item by item and tick each item in the entry's Plan list as it is done
    (`- [ ]` becomes `- [x]`), with a line of what the verification showed. The ticks are
    how the player sees the plan being carried out, and they are how the next session
    (or the main session) knows what is done.
-2. The entry's status becomes "(status: in progress)" as soon as you start: the code is
-   being changed, and the case file has to say so. (A session that takes over an
-   interrupted run finds this status - it is the sign that the work is half done.)
-3. **Write down every file you change, as you change it**: one line in the entry
+2. **Write down every file you change, as you change it**: one line in the entry
    ("changed: dm/android/front_player.c") and the file in files/ under its path in the
    tool tree. A run that is cut off half way then leaves a trail - the next one reads it
    instead of working out what changed by diffing the tree itself.
-4. Before you change a file, copy the original into the case file: the file's path in the tool tree
+3. Before you change a file, copy the original into the case file: the file's path in the tool tree
    under orig/ in the case folder (gamespec/<title ID>/orig/<path>), creating the folders as needed.
    The exported zip's diff is made from that original - without it the pack carries whole files only,
    and nobody can see what you actually changed.
-5. Change the files under nxnative/ in $NX2A_REPO, then re-run the port to verify.
-6. Close the case. Four things, and all four are needed before the case is closed:
+4. Change the files under nxnative/ in $NX2A_REPO, then re-run the port to verify.
+5. Close the case. Four things, and all four are needed before the case is closed:
    a. the status becomes "(status: fixed)" or "(status: not fixed)", and the entry says
       what the verification showed;
    b. the files you changed are in files/ under their path in the tool tree, and fix.md
@@ -193,11 +183,11 @@ work over, and each of them worked out what had changed from the tree.
    d. the case's Lifecycle section says where the game stands now.
    Changing the status is one of the four, not the whole of it: a case that changed its
    status and left nothing behind is not closed.
-7. Answer the main session with a summary: what changed, whether the verification passed, what the
+6. Answer the main session with a summary: what changed, whether the verification passed, what the
    player does next. English, like the rest of your work - the main session translates it for the
    player. Do not write an nx-case block yourself: the main session writes that one, in the
    language the player writes in.
-8. Leave the case the way the knowledge base can use it: add a "## Case index row" section
+7. Leave the case the way the knowledge base can use it: add a "## Case index row" section
    to the case file, with one JSON object in it:
    ```json
    {"number": "case-<title ID>-<slug>", "title": "fix(<layer>): <one line>", "symptom": "black",
@@ -208,8 +198,7 @@ work over, and each of them worked out what had changed from the tree.
    perf, audio, movie, feature. The person at the computer pastes that object into the
    knowledge base's corpus, and the next game with the same symptom finds it there.
 
-The statuses are five: "(status: pending approval)" (a plan waiting for the player),
-"(status: in progress)" (the plan is being executed - the code is being changed right now),
+The statuses are four: "(status: pending approval)" (a plan waiting for the player),
 "(status: fixed)" (fixed and verified), "(status: not fixed)" (tried, it did not work) and
 "(status: open)" (found, but there is nothing to execute yet - the player decides what to do about
 it). Only "pending approval" is a plan the player can confirm.
