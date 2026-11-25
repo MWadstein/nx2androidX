@@ -23,6 +23,7 @@ import com.nx.android.agent.runtime.AgentSessionStore
 import com.nx.android.agent.runtime.AgentSettingsStore
 import com.nx.android.core.di.ApplicationCoroutineScope
 import com.nx.android.core.storage.AppPaths
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -32,7 +33,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
-import java.io.File
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -416,7 +416,7 @@ class AgentConversationState @Inject constructor(
      * 准确联系，靠它把类型和任务对上。
      */
     fun refreshSubagents() {
-        val path = activePath
+        val path = currentSessionPath()
         val calls = subagentCalls()
         scope.launch {
             val listed = withContext(Dispatchers.IO) { subagentStore.list(path, calls) }
@@ -429,6 +429,16 @@ class AgentConversationState @Inject constructor(
     }
 
     /**
+     * 引擎此刻在答的那一局的会话文件。
+     *
+     * 指针（`activePath`）是引擎在**一轮结束时**报上来的路径：第一轮派出的子 Agent 跑的时候
+     * 它还指着上一轮，面板就找不到这一轮子 Agent 的 transcript（空着）。引擎当前正在写的那个
+     * 玩家会话文件才是此刻的答案——子 Agent 的会话文件同时在写，但它们不算玩家的会话。
+     */
+    private fun currentSessionPath(): String? =
+        catalog.current()?.path ?: activePath?.takeIf { File(it).isFile }
+
+    /**
      * 子 Agent 在跑的时候，面板要看得见它在干啥：两秒读一次它的 transcript。
      *
      * 轮到结束、也没有在跑的，就停下来——不空转。
@@ -439,7 +449,7 @@ class AgentConversationState @Inject constructor(
             while (true) {
                 delay(2000)
                 val listed = withContext(Dispatchers.IO) {
-                    subagentStore.list(activePath, subagentCalls())
+                    subagentStore.list(currentSessionPath(), subagentCalls())
                 }
                 subagents = listed.runs
                 subagentRuns = listed.byCall
@@ -477,7 +487,7 @@ class AgentConversationState @Inject constructor(
     /** 子 Agent 的完整对话：它自己的会话文件（还在跑的就是它的 transcript）。 */
     suspend fun subagentConversation(subagent: AgentSubagent): List<AgentMessage> =
         withContext(Dispatchers.IO) {
-            val messages = subagentStore.conversation(subagent, activePath)
+            val messages = subagentStore.conversation(subagent, currentSessionPath())
             PiHistoryMapper.map(messages)
         }
 

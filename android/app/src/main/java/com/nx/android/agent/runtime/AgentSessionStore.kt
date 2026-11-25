@@ -26,6 +26,9 @@ class AgentSessionStore internal constructor(private val dir: File) {
 
     /** 指针落到某个引擎会话文件上。 */
     fun setActive(path: String) {
+        // 引擎有时报来的是会话的 id（`s-…`），不是文件路径：那个值解析不出会话 id，
+        // 指针存了它，子 Agent 的面板就再也找不到这一局的 transcript。指针只收文件。
+        if (!path.endsWith(".jsonl")) return
         dir.mkdirs()
         activeFile.writeText(path)
     }
