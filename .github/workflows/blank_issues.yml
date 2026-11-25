@@ -1,9 +1,10 @@
 # The chooser has no blank issue entry (ISSUE_TEMPLATE/config.yml), so the web form cannot produce one. The API
-# can: an issue with nothing in it, or with a gamespec zip and no words around it, is not a report — the device,
-# the app version and what happens are all missing. Such an issue is closed with a pointer to the form that fits.
+# can: an issue with nothing in it is not a report — the device, the app version and what happens are all missing.
+# Such an issue is closed with a pointer to the form that fits.
 #
 # A report that arrives with words in it is left alone, however it was written. A report that was closed here and
-# then filled in is reopened: the words are the report, not the way it was filed.
+# then filled in is reopened: the words are the report, not the way it was filed. The zip the app exports is a case
+# file: it stays, and it carries the label that queue is worked by.
 name: Blank issues
 
 on:
@@ -26,9 +27,21 @@ jobs:
             const body = (issue.body || '').trim();
             // A form submission carries the headings of the fields it was filled in.
             const fromForm = body.startsWith('### ');
+            // The zip the app exports is the substance of a case file: it stays, and it is labelled.
+            const caseFile = /[0-9A-Fa-f]{16}-gamespec\.zip/.test(body);
             // A link on its own is not a report: the attachment is a file, not a description.
             const prose = body.replace(/\[[^\]]*\]\([^)]*\)/g, '').trim();
             const hasWords = prose.length > 0;
+
+            if (caseFile) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['case file'],
+              });
+              return;
+            }
 
             if (fromForm || hasWords) {
               // It is a report. If it was closed here and now carries words, it is open again. The label is the
