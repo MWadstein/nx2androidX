@@ -52,7 +52,9 @@ fi
 
 # 2. the build tools
 echo ">> the build tools"
-python3 "$here/fetch_debs.py" --out "$cache/debs" --cache "$cache/.deb-cache" glslc zlib1g >/dev/null
+python3 "$here/fetch_debs.py" --out "$cache/debs" --cache "$cache/.deb-cache" \
+    glslc zlib1g libexpat1 libffi8 libzstd1 libbz2-1.0 liblzma5 libsqlite3-0 \
+    libncursesw6 libreadline8t64 libuuid1 libcrypt1 >/dev/null
 python3 "$here/build_toolchain.py" --out "$cache/toolchain" --cache "$cache" --debs "$cache/debs"
 
 # 3. the payload the app ships
