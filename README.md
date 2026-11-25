@@ -255,7 +255,9 @@ Contributions are welcome, and the first one does not have to be code.
 - **A game to port?** [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) — the whole flow, on the phone or on a computer, and no computer is needed at all.
 - **Code, docs or translations?** [CONTRIBUTING.md](CONTRIBUTING.md) — the rules, the repository map, the tests and the commit messages.
 
-A question that fits no template is welcome too: open an issue and label it `question`. A game that runs goes through the **Game report** form, a game that does not through the **Port request** form.
+A question that fits no template is welcome too: the **Question** form is the way in. A game that runs goes through the **Game report** form, a game that does not through the **Port request** form.
+
+Every issue starts from a form: an issue with nothing in it is closed by a bot, and the comment on it points back at the forms.
 
 ## Keys and game files
 
