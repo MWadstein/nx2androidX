@@ -105,32 +105,33 @@ class TranslationWorkersTest(unittest.TestCase):
         p.o = pipeline.Options(folder=Path('/tmp'), jobs=jobs, low_mem=low_mem)
         return p
 
+    def workers(self, avail=None, **kw):
+        """the pipeline's count on a machine with 8 cores: the count follows the cores (one worker per core), so a
+        runner with fewer of them would answer with its own number and the test would not say what it means"""
+        with mock.patch.object(memory, 'available_mb', return_value=avail), \
+                mock.patch.object(pipeline.os, 'cpu_count', return_value=8):
+            return self.port(**kw).translation_workers()
+
     def test_the_workers_follow_the_free_memory(self):
-        with mock.patch.object(memory, 'available_mb', return_value=2048):
-            self.assertEqual((2, 2048), self.port().translation_workers())
+        self.assertEqual((2, 2048), self.workers(2048))
 
     def test_a_phone_with_room_keeps_one_worker_per_core(self):
-        with mock.patch.object(memory, 'available_mb', return_value=8192):
-            self.assertEqual((8, 8192), self.port().translation_workers())
+        self.assertEqual((8, 8192), self.workers(8192))
 
     def test_the_low_memory_mode_caps_them(self):
-        with mock.patch.object(memory, 'available_mb', return_value=8192):
-            self.assertEqual((2, 8192), self.port(low_mem=True).translation_workers())
+        self.assertEqual((2, 8192), self.workers(8192, low_mem=True))
 
     def test_jobs_still_caps_them(self):
         """The maintenance knob keeps its meaning: --jobs 2 is two workers, memory or not"""
-        with mock.patch.object(memory, 'available_mb', return_value=8192):
-            self.assertEqual((2, 8192), self.port(jobs=2).translation_workers())
+        self.assertEqual((2, 8192), self.workers(8192, jobs=2))
 
     def test_no_room_stops_the_stage_with_a_clear_error(self):
-        with mock.patch.object(memory, 'available_mb', return_value=900):
-            with self.assertRaises(pipeline.BuildError) as cm:
-                self.port().translation_workers()
+        with self.assertRaises(pipeline.BuildError) as cm:
+            self.workers(900)
         self.assertIn('memory', str(cm.exception))
 
     def test_a_desktop_machine_keeps_one_worker_per_core(self):
-        with mock.patch.object(memory, 'available_mb', return_value=None):
-            self.assertEqual((8, None), self.port().translation_workers())
+        self.assertEqual((8, None), self.workers(None))
 
 
 if __name__ == '__main__':
