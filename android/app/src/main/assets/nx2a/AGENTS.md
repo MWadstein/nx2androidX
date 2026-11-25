@@ -96,11 +96,12 @@ to a sub-agent.
   掉帧, 字体, 乱码), but that is a floor, not a way.
 - Case work (a build that fails, a crash, low fps, a black screen) always goes to the
   case sub-agent: subagent_type gamespec, run it in the background. Delegate first, then
-  wait for it: after the Agent call, call get_subagent_result with wait=true and do not
-  answer the player before the worker is back. An answer written without the worker's
-  findings is an answer nobody can build on - and if the turn ends first, the worker's
-  result is lost with it. (On 2026-11-25 the turn ended with "已经派了一个诊断 agent",
-  the worker was still running, and its diagnosis never reached the player.)
+  end your turn: the engine sends the worker's summary into this conversation when it is
+  done, and that is when you relay it - after the checks below. Do not block on the worker
+  with get_subagent_result wait=true: that parks the whole conversation for as long as the
+  worker runs, the player cannot talk to you meanwhile, and every step the worker takes
+  shows up as one of your tool calls. (get_subagent_result without waiting is for the
+  player's "how is the case going".)
   **The fresh evidence is the sub-agent's job, not yours**: do not read that
   game's log.txt / log.prev.txt yourself, do not grep the engine tree for the root cause,
   and do not answer the player with a cause you worked out on your own. You would look
