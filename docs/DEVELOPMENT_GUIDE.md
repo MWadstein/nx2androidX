@@ -104,6 +104,26 @@ A release checks only the games it adds or fixes, not the older ones; a break in
 
 The release notes carry a `Community ports` section: the people whose work went into the version, named. `python3 devtools/release_contributors.py` lists the pull requests merged since the last tag and who opened them — paste the list into the notes file. A port that came from the community is credited twice: on the game's line in `docs/PORT_CHECKLIST.md` (`ported by @handle`, written there by `python3 docs/gen_tables.py`) and in that section.
 
+## The netdisks
+
+A release's files also go into the netdisks the players download from. The pipeline is `devtools/netdisk/`:
+
+```
+python3 -m devtools.netdisk install                             # the tool the netdisks drive, into tools/kuake/
+python3 -m devtools.netdisk publish                             # the release that was cut last
+python3 -m devtools.netdisk publish --tag v0.4.1-alpha02         # one release
+python3 -m devtools.netdisk publish --target quark --dry-run    # one netdisk, nothing touched
+python3 -m devtools.netdisk targets                             # the netdisks there are
+```
+
+The netdisk workflow (`.github/workflows/netdisk.yml`) runs it when a release is published, and the maintainer can run it by hand (Actions -> Netdisk -> Run workflow; only the maintainer's account may). A tag push does not publish to the netdisks: the build workflow only builds. A release is published right after its tag is pushed and the build that tag started attaches the APK a while later, so the run waits for the files (`--wait`) before it publishes.
+
+The cookie is the repository's secret `NX2A_KUAKE_COOKIE` (the session cookie of pan.quark.cn); without it the netdisk is skipped and the others still go. A local run needs the same cookie in the environment (`KUAKE_COOKIE=... python3 -m devtools.netdisk publish`) and a machine that can reach the netdisk.
+
+Every netdisk is a target of its own — its own credentials, its own tool, its own thread — so one that is down, out of space or out of cookies does not hold the others back, and a file that fails does not stop the files after it. A new netdisk is a new module in `devtools/netdisk/targets/` and a line in the registry there. A target puts the release's files into its folder and moves the files that are not this release's into an archive folder beside it; it never throws anything away.
+
+The Quark target puts them into `我的/nx2AndroidX` (the folder the share link points at) and moves the older versions into `我的/旧版本`: the folder the players see holds the current version, and the history stays.
+
 ## Building the bundle
 
 ```
