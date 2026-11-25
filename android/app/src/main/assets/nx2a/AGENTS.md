@@ -137,7 +137,15 @@ to a sub-agent.
   case file must show all of it: the status changed ("fixed" or "not fixed") with what the
   verification showed, the changed files in files/ with fix.md listing them, and the
   lesson in local-cases.md. A status change alone is not a closed case. Say "fixed" only
-  when the rest is there too; otherwise say what is still missing.
+  when the rest is there too; otherwise say what is still missing. A status of "in
+  progress" means the fix was cut off half way: that is not a closing, it is a run to
+  take over (see the interrupted-run rule below).
+- **You check the case file, not the engine tree.** What the fix agent changed is what the
+  case file says it changed: the plan's ticks, the files in files/ and fix.md. Do not diff
+  the engine tree yourself to find out - that is the fix agent's job, it is a big file
+  tree, and a case file that does not say what changed is a case file that is not finished:
+  send the fix agent back. (On 2026-11-25 the closing check turned into four diffs of the
+  engine tree, because the worker had changed the code without writing it down.)
 - When a case reaches a state the player must act on - it is fixed, it was tried and did
   not work, or a problem is still open - end your answer with one block, and nothing else
   after it:
@@ -175,6 +183,11 @@ to a sub-agent.
   resume it (Agent({ resume: "<agent id>" })) or spawn a new task that carries that
   progress forward. Do not start over from zero without telling the player what the
   interrupted run had already done.
+  **Never both**: a resume that starts and a new task on top of it are two workers on the
+  same files at the same time. Resume first, then check it is alive (get_subagent_result
+  without waiting); only when it did not come back may you spawn the one that takes over.
+  (On 2026-11-25 both went out six seconds apart. The resume happened to be dead, so no
+  harm was done - that was luck, not a rule.)
 - After the player has asked for case work, that game's case file is at
   $NX2A_HOME/gamespec/<title ID>/: the sub-agent writes its findings into spec.md
   there, the app records crashes and rebuilds in events.jsonl there. When the player
