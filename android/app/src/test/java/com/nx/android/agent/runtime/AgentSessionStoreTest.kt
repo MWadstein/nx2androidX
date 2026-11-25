@@ -44,4 +44,13 @@ class AgentSessionStoreTest {
         File(dir, "_active").writeText("s-1795305443005")
         assertEquals("s-1795305443005", AgentSessionStore(dir).activePath())
     }
+
+    @Test
+    fun `the pointer does not take a session id`() {
+        // the engine sometimes reports the session's id instead of its file: a pointer to it
+        // resolves to no session at all, so the sub-agent panel finds nothing
+        val store = store()
+        store.setActive("s-1795305443005")
+        assertNull(store.activePath())
+    }
 }
