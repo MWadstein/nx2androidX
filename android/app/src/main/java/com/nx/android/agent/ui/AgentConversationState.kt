@@ -416,10 +416,12 @@ class AgentConversationState @Inject constructor(
      * 准确联系，靠它把类型和任务对上。
      */
     fun refreshSubagents() {
-        val path = currentSessionPath()
         val calls = subagentCalls()
         scope.launch {
-            val listed = withContext(Dispatchers.IO) { subagentStore.list(path, calls) }
+            // the path is read on disk: it must not be read on the main thread
+            val listed = withContext(Dispatchers.IO) {
+                subagentStore.list(currentSessionPath(), calls)
+            }
             subagents = listed.runs
             subagentRuns = listed.byCall
             // 子代理在跑的时候，档案上的进展也在变：两秒读一次，玩家看得见它干到哪了
@@ -432,11 +434,16 @@ class AgentConversationState @Inject constructor(
      * 引擎此刻在答的那一局的会话文件。
      *
      * 指针（`activePath`）是引擎在**一轮结束时**报上来的路径：第一轮派出的子 Agent 跑的时候
-     * 它还指着上一轮，面板就找不到这一轮子 Agent 的 transcript（空着）。引擎当前正在写的那个
-     * 玩家会话文件才是此刻的答案——子 Agent 的会话文件同时在写，但它们不算玩家的会话。
+     * 它还指着上一轮，面板就找不到这一轮子 Agent 的 transcript（空着）。所以跑着的时候读的是
+     * 「引擎此刻在写的那个玩家会话文件」——子 Agent 的会话文件同时在写，但它们不算玩家的会话。
+     * 闲下来时反过来：玩家在看的那一局，指针说了算（刚切过对话时，引擎还没往新文件上写，
+     * 最新的文件还是上一局的）。
      */
-    private fun currentSessionPath(): String? =
-        catalog.current()?.path ?: activePath?.takeIf { File(it).isFile }
+    private fun currentSessionPath(): String? {
+        val pointed = activePath?.takeIf { File(it).isFile }
+        return if (conversation.running) catalog.current()?.path ?: pointed
+        else pointed ?: catalog.current()?.path
+    }
 
     /**
      * 子 Agent 在跑的时候，面板要看得见它在干啥：两秒读一次它的 transcript。
