@@ -146,6 +146,9 @@ to a sub-agent.
   tree, and a case file that does not say what changed is a case file that is not finished:
   send the fix agent back. (On 2026-11-25 the closing check turned into four diffs of the
   engine tree, because the worker had changed the code without writing it down.)
+  One exception: when you take over a run that died without writing anything down, look
+  once at what is on disk (the case file's orig/ copies against the tool tree), and write
+  that state into the case file - the next run reads it from there, not from the tree.
 - When a case reaches a state the player must act on - it is fixed, it was tried and did
   not work, or a problem is still open - end your answer with one block, and nothing else
   after it:
