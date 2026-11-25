@@ -6,7 +6,7 @@
 # The two cuts turn the guest's missing null check into a clean failure of the video context, so the game goes on to the menu. The good case is left bit-for-bit
 # unchanged: the branch is not taken and the code runs exactly as before.
 CUTS = {
-  # Teenage Mutant Ninja Turtles: Shredder's Revenge 1.0.9 (v0) main (the game's own module, the "Paris" engine's MonoGame build):
+  # Teenage Mutant Ninja Turtles: Shredder's Revenge 1.0.9 (v589824) main (the game's own module, the "Paris" engine's MonoGame build):
   # 1. main+0xfafa0: ldr x8,[sp,#0x10] → cbz x8, main+0xfafb4.
   #    x8 already holds the result of the member lookup (the lookup leaves it there; the probe at main+0xfaf98 printed the member descriptor in the good hits and
   #    0 in the failing one), so the load is redundant. When the lookup answered null the helper returns null (main+0xfafb4 reloads it from the stack) instead of
