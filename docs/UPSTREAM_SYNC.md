@@ -23,7 +23,14 @@ Switch and Switch 2 games. It is an independent reimplementation, not a fork of
 ours or of nxnative; its Metal 4 backend and title modules are Apple-only, so it
 is useful for Switch 2 design/progress observations and general engine ideas,
 not for direct code reuse. Switch 2 support here is a low-priority, bottom-of-list
-item while upstream implementations are still heavy work in progress.
+item while upstream implementations are still Apple-only. For context,
+`upstream-nxnative/main` is further along than that wording suggests: its README
+lists 21 Switch 2 titles with Mac gameplay testing (including both Xenoblade 2
+and Xenoblade X Switch 2 Editions), NUP/folder build instructions, and 88 commit
+subjects mentioning Switch 2. It has NVN2/Ampere shaders, Switch 2 pad, Mii,
+audio, codec and display work. Those builds are validated on Mac, not iOS, and
+this Android tree has no NUP packing or Switch 2 service layer, so Switch 2
+support here stays a research item rather than an imminent port.
 
 See [TECH_LINEAGE.md](TECH_LINEAGE.md) for the full stack and for the exact
 source of every borrowed fix.
