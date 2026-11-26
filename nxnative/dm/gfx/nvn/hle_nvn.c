@@ -866,21 +866,27 @@ static void cmd_new_segment(cmd_t *o, uint8_t *mem, size_t n) {
 // The segment pool grows on demand (SMBW opening course: many small command buffers each overflow once per frame, and the old fixed 64 segments × 1 MB ran out within 8 frames); abort only beyond HOSTSEG_CAP in total.
 // An empty command pool can still have guest control memory: reserve a distinct lifetime anchor per recording below, so any overflow has a real guest lifetime. Super Mario Odyssey's Wooded Kingdom
 // supplied 0x200-byte control blocks but the old no-op AddControlMemory lost that association: ~11 unknown-origin segments accumulated per frame until the 1 GiB cap, and whole-pool scans progressively slowed the main thread.
-// Without either kind of guest storage the lifetime remains unknown; keep that conservative fallback rather than recycling cached handles by age. Its size follows the request, HOSTSEG_MIN up to HOSTSEG_SZ.
+// Without either kind of guest storage the lifetime remains unknown; keep that conservative fallback rather than recycling cached handles by age. Its size follows the request, HOSTSEG_SMALL up to HOSTSEG_SZ.
+// A segment is HOSTSEG_SZ, with two exceptions: an empty pool with a small request outside a recording gets HOSTSEG_SMALL (Super Mario Odyssey grants 512 bytes thousands of times before recording;
+// at 256 KB each and with no recording to reclaim them they reached the 1 GiB cap), and a record larger than HOSTSEG_SZ gets a segment that holds it plus a JUMP's room (before, it was written past the segment's end).
 #define HOSTSEG_SZ (256u << 10)
-#define HOSTSEG_MIN (4u << 10)
+#define HOSTSEG_SMALL (4u << 10)
 #define HOSTSEG_CAP (1u << 30)
 uint64_t dm_nvn_frame_count(void);
 typedef struct { uint8_t *mem; uint64_t frame; int busy; uintptr_t org_lo, org_hi; uint32_t sz; } hostseg_t;   // org: the guest range of the recording it hangs off (0 = unknown, never reclaimed)
 static hostseg_t *g_hostseg; static int g_nhostseg, g_caphostseg; static uint64_t g_hostseg_bytes;
 static pthread_mutex_t g_hostseg_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t hostseg_size(const cmd_t *o, int empty_pool, uint32_t want) {
+    if (empty_pool) return want && want <= HOSTSEG_SMALL && !o->recording ? HOSTSEG_SMALL : HOSTSEG_SZ;
+    return want + 16 > HOSTSEG_SZ ? (want + 16 + 0xfff) & ~(uint32_t)0xfff : HOSTSEG_SZ;   // 16: room for the next JUMP; want includes OP_RESERVE
+}
 // Take a segment of sz bytes: origin = the current recording's guest bytes [BEGIN, end of JUMP); if the write pointer is already in a host segment (overflowing again), keep that segment's origin
 static uint8_t *hostseg_take(const cmd_t *o, uint32_t sz) {
     static unsigned total; uint64_t f = dm_nvn_frame_count(); uint8_t *m = NULL;
     uintptr_t lo = 0, hi = 0, cur = o ? (uintptr_t)o->cur : 0;
     pthread_mutex_lock(&g_hostseg_mu);
     int in_seg = 0;
-    for (int i = 0; i < g_nhostseg && cur; i++) if (cur >= (uintptr_t)g_hostseg[i].mem && cur <= (uintptr_t)g_hostseg[i].mem + g_hostseg[i].sz) { lo = g_hostseg[i].org_lo; hi = g_hostseg[i].org_hi; in_seg = 1; break; }
+    for (int i = 0; i < g_nhostseg && cur; i++) if (cur >= (uintptr_t)g_hostseg[i].mem && o->end == g_hostseg[i].mem + g_hostseg[i].sz) { lo = g_hostseg[i].org_lo; hi = g_hostseg[i].org_hi; in_seg = 1; break; }   // by the segment's end too: a small segment can end where another starts
     if (!in_seg && o && o->recording && o->cur) { lo = o->recording == 1 && o->begin && (uintptr_t)o->begin <= cur ? (uintptr_t)o->begin : cur; hi = cur + 16; }
     if (!in_seg && o && o->host_control && o->ctl_anchor) { lo = o->ctl_anchor; hi = lo + 16; }
     for (int i = 0; i < g_nhostseg && !m; i++)
@@ -893,7 +899,7 @@ static uint8_t *hostseg_take(const cmd_t *o, uint32_t sz) {
     unsigned t = ++total; int n = g_nhostseg; unsigned mb = (unsigned)(g_hostseg_bytes >> 20);
     pthread_mutex_unlock(&g_hostseg_mu);
     if (!m) die("NVN command memory: the game's pool is empty and host-lent segments reached %u MB without being reclaimed by the game's blocks", HOSTSEG_CAP >> 20);
-    if (t == 1 || t % 1024 == 0) LOG("[nvn] the game's command memory ran short, the host lends a segment (%u times so far, frame %llu, segment pool %d segments, %u MB)", t, (unsigned long long)f, n, mb);
+    if (t == 1 || t % 1024 == 0) LOG("[nvn] the game's command memory ran short, the host lends a segment of %u KB (%u times so far, frame %llu, segment pool %d segments, %u MB)", sz >> 10, t, (unsigned long long)f, n, mb);
     return m;
 }
 // The game gives out [lo, hi): segments whose recording's guest bytes overlap it are dead, reclaim them
@@ -909,10 +915,10 @@ NVN(nvnCommandBufferAddCommandMemory, void, NVNcommandBuffer *c, const NVNmemory
     // Keep replay records and their handles in host storage, preserving the original command-byte accounting. The guest's control bytes are an ownership anchor, not our private command format.
     // Do not switch an in-progress command recording into control accounting: its earlier guest command bytes still own its overflow chain.
     if (!pl && !o->recording && o->ctl_mem) {
-        uint32_t sz = HOSTSEG_MIN; while (sz < n && sz < HOSTSEG_SZ) sz <<= 1;
+        uint32_t sz = hostseg_size(o, 1, (uint32_t)n);
         o->cur = o->end = NULL; o->used = 0; o->host_control = 1; o->host_sz = sz; o->ctl_anchor = 0; return;
     }
-    if (!pl || n < 64) { if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.hostseg++; pthread_mutex_unlock(&g_cs_mu); } uint32_t sz = HOSTSEG_SZ; if (!pl && n >= 64) { sz = HOSTSEG_MIN; while (sz < n && sz < HOSTSEG_SZ) sz <<= 1; }
+    if (!pl || n < 64) { if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.hostseg++; pthread_mutex_unlock(&g_cs_mu); } uint32_t sz = hostseg_size(o, !pl, (uint32_t)n);
         cmd_new_segment(CB(c), hostseg_take(CB(c), sz), sz); return; }
     if (!pl->mem) { LOG("[RED] AddCommandMemory: pool has no CPU storage"); return; }
     hostseg_release((uintptr_t)(pl->mem + off), (uintptr_t)(pl->mem + off + n));
@@ -943,14 +949,15 @@ static void cmd_host_anchor(cmd_t *o) {
 static uint8_t *cmd_alloc_keep(cmd_t *o, uint32_t size, uint32_t keep) {
     size = (size + 7) & ~7u;
     if (o->host_control && o->recording == 2 && !o->cur) {
-        cmd_host_anchor(o); uint32_t sz = o->host_sz ? o->host_sz : HOSTSEG_MIN; while (sz < size + keep && sz < HOSTSEG_SZ) sz <<= 1;
+        cmd_host_anchor(o); uint32_t sz = o->host_sz ? o->host_sz : HOSTSEG_SMALL; while (sz < size + keep && sz < HOSTSEG_SZ) sz <<= 1;
         cmd_new_segment(o, hostseg_take(o, sz), sz);
     }
     for (int tries = 0; !o->cur || o->cur + size + keep > o->end; tries++) {
         // The game's callback cannot supply enough (newer-SDK games hand out small chunks sized for real-device commands, or disable the callback and manage memory themselves): continue recording in a host segment instead of aborting
         if (!o->cb || tries == 2) {
             static int once; if (!once++) LOG("[nvn] command memory: the game's callback did not add enough (cb=%p, need %u bytes), using a host-lent segment", (void *)o->cb, size + keep);
-            uint32_t sz = o->host_control ? HOSTSEG_MIN : HOSTSEG_SZ; while (sz < size + keep && sz < HOSTSEG_SZ) sz <<= 1;
+            uint32_t sz = o->host_control ? HOSTSEG_SMALL : HOSTSEG_SZ;
+            if (o->host_control) while (sz < size + keep && sz < HOSTSEG_SZ) sz <<= 1; else sz = hostseg_size(o, 0, size + keep);
             cmd_new_segment(o, hostseg_take(o, sz), sz); break;
         }
         if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.cbs++; pthread_mutex_unlock(&g_cs_mu); }
