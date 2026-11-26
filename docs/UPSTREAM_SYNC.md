@@ -53,7 +53,10 @@ read to understand a game; fixes for our build stay in our own profile branch an
 validated on the device before they land. We compare the files on every sweep and pull
 only what our Android build actually consumes; copying a whole folder would overwrite
 `android.tsv` (our app metadata and porting log) and can change shader inputs for a
-build we have not validated. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for attribution.
+build we have not validated. The upstream `README.md` files are the exception: they
+are history, not inputs, so we keep them where the profile exists as provenance for
+brings-up, allocator evidence and stability fixes. They are never authoritative for
+Android behavior. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for attribution.
 
 ### What the profile files do here
 
@@ -66,13 +69,27 @@ build we have not validated. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for attribut
 | `shader_pairs.tsv` | Shared format, not an Android runtime input | Pipeline pairs for the Apple chain's build-time pairing; Android records `vk_pipelines.bin` at runtime instead. Kept for profile parity and chain inputs. |
 | `pso_manifest.tsv` | No (legacy here) | Apple's prewarm seed list. Android prewarms from the per-pack pipeline records, so this is not read by our host. |
 | `bf_want.tsv` | No direct Android use | Apple chain's rewritable-sample variant list; declared as a chain input but not used by `shader_vk.py`. |
-| `README.md` | No (documentation) | Upstream's generated game-facts page. Our gallery/checklist are generated from `android.tsv` by `docs/gen_tables.py`; a profile README is optional and not read at runtime. |
+| `README.md` | No (provenance) | Upstream's bring-up history: tested builds, allocator/memory evidence, rendering and stability findings. Kept as reference and attributed to its source; our gallery/checklist are generated from `android.tsv` by `docs/gen_tables.py`. Do not overwrite a README we wrote for Android (for example Xeno X). |
 
 Example checked on `010074F013262000` (Xenoblade Chronicles 3): `game.tsv`, all
 shader tables, `.conflicts`, `shader_pairs`, `pso_manifest`, `bf_want` and
 `shader_facts` are byte-identical to `upstream-nx2android/main`. Our `android.tsv`
 adds `graphics nvn` and a `readme_note` row; those are our Android metadata and
-should be kept. Upstream also carries a generated `README.md` we do not need.
+should be kept. Upstream's `README.md` is now kept here too: it records the compact
+4 GB / 512 MB arena trade-off, issue #3149 and the open Zstd worker crash — history
+worth preserving as research, but not a substitute for our own validation.
+
+On each sweep, check which upstream READMEs are missing or stale before deciding
+what to pull:
+
+```bash
+git ls-tree -r --name-only upstream-nx2android/main -- nxnative/dm/games |
+  grep '/README.md$'
+git ls-tree -r --name-only HEAD -- nxnative/dm/games | grep '/README.md$'
+```
+
+Copy only the ones whose profile folder exists here, and keep Android-written
+READMEs as-is.
 
 ## Where we stand
 
