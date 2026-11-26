@@ -32,12 +32,11 @@ ap.add_argument('--capture', help='a folder of shaders captured at run time on t
 ap.add_argument('--zstd', type=int, default=dmsv.LEVEL, help=f'zstd level of the SPIR-V in the bundle (default {dmsv.LEVEL}); 0: version 1, uncompressed')
 ap.add_argument('--xlate', help="the translator (dmsh_xlate.dll) to run (default: the iOS chain's dm/gfx/tools/dmsh_xlate_bin; the porter builds one from the in-repo source)")
 ap.add_argument('--spirv-tools', help="the folder of spirv-dis, spirv-as and spirv-val (the NDK's shader-tools/<host>), for the profile's SPIR-V patches that work on the text; a patch that works on the SPIR-V words needs none")
-a = ap.parse_args()
 
 GAME = dmsh_chain.load_game()
 FACTS = dmsh_facts.load()
 MAP = str(GAME.table('shader_map.tsv'))
-XLATE_DLL = a.xlate or str(TOOLS / 'dmsh_xlate_bin/dmsh_xlate.dll')
+XLATE_DLL = str(TOOLS / 'dmsh_xlate_bin/dmsh_xlate.dll')
 STAGES = {'vs': 0, 'ps': 1, 'gs': 2, 'hs': 3, 'ds': 4, 'cs': 5}   # NVN stage numbers
 # Storage buffers are bound from a 256-byte boundary below their address (gfx_vk_exec.c SB_ALIGN, the same number): Vulkan's largest minStorageBufferOffsetAlignment, so a multiple of
 # every device's; the translator offsets every storage access by the address's distance from that boundary (Program.cs QueryHostStorageBufferOffsetAlignment)
@@ -230,6 +229,32 @@ def spirv_bindings(spv):
         if k == 'u': io[sc][2] |= 1 << loc
     return out, local, io
 
+def compact_bindings(spv, binds, res):
+    """Renumber descriptor bindings into a small contiguous range, in both SPIR-V and the reflection.
+
+    Bindless arrays make the translator hand out binding numbers past a million (a 1048576-entry
+    texture array advances the next binding), while the packed reflection's binding is a u16. The
+    numbers are only identifiers shared by the module's OpDecorate Binding and the host's
+    descriptor writes, so renumbering both keeps the shader semantics and fits the reflection.
+    """
+    rows = [r for k in ('cbufs', 'sbufs', 'textures', 'images') for r in res.get(k, ())]
+    used = sorted({b['binding'] for b in binds} | {r['binding'] for r in rows})
+    if not used or max(used) < 256: return spv, binds, res
+    remap = {old: i + 1 for i, old in enumerate(used)}
+    w = list(struct.unpack(f'<{len(spv) // 4}I', spv))
+    i = 5
+    while i < len(w):
+        n, op = w[i] >> 16, w[i] & 0xffff
+        if op == OP_DECORATE and n >= 4 and w[i + 2] == DEC_BINDING and w[i + 3] in remap:
+            w[i + 3] = remap[w[i + 3]]
+        i += n
+    spv = struct.pack(f'<{len(w)}I', *w)
+    for b in binds:
+        if b['binding'] in remap: b['binding'] = remap[b['binding']]
+    for r in rows:
+        if r['binding'] in remap: r['binding'] = remap[r['binding']]
+    return spv, binds, res
+
 # Handle decoding: as dmsh_build.py decode_tex / decode_ubo_tex / reflect (names: <stage>_t<type>_cb<slot>_<handle>, <stage>_c<n>, <stage>_s<n>, <stage>_i…)
 TEX_BASE, IMG_BASE, IMG_SLOTS, SEPTEX_BASE, SEPTEX_SLOT0, SAMP_BASE = 0x20, 0x120, 8, 0x168, 128, 0x568
 # NVN geometry c0 uses 0x410 + 16 * slot. NieR's IndexBuildIndependent GS reads
@@ -237,7 +262,9 @@ TEX_BASE, IMG_BASE, IMG_SLOTS, SEPTEX_BASE, SEPTEX_SLOT0, SAMP_BASE = 0x20, 0x12
 SSBO = {'vs': 0x110, 'gs': 0x410, 'cs': 0x310, 'ps': 0x510}
 def classify(stage, b, res):
     nm = b['name']; e = dict(b)
-    # Dynamic pool arrays use driver c2 slot indices (as the Metal backend).
+    # Dynamic pool arrays use driver c2 slot indices (as the Metal backend). The profile must
+    # opt in and the translator must already describe the host's 32-slot array; do not infer
+    # dynamic handles merely from a large SPIR-V array length (NVN2 intentionally keeps full pools).
     if GAME.get('android_dynamic_slots', 'off') == 'on' and b['type'] in ('image', 'sampler', 'tbuf') and b['count'] == 32 and re.fullmatch(r'[a-z]+_[ts]\w*_cb0_40000000', nm):
         e.update(kind='texd' if b['type'] in ('image', 'tbuf') else 'sampd'); return e
     m = re.fullmatch(r'[a-z]+_c(\d+)', nm)
@@ -301,7 +328,7 @@ DESC = {'ubo': 0, 'ssbo': 1, 'sampled': 2, 'storage': 3, 'tbuf': 4, 'storage_tbu
 SAMP_NONE, SAMP_TEX, SAMP_SLOT, SAMP_ID, SAMP_UBO = 0, 1, 2, 3, 4
 kinds_all = collections.Counter()
 def refl_bin(binds, c1, local):
-    out = [struct.pack('<5I', len(binds), len(c1), *(list(local) + [1, 1, 1])[:3])]
+    records = []
     for e in binds:
         kind = KIND.get(e['kind'], 255)
         reg = e.get('reg'); reg = -1 if reg is None else reg
@@ -313,9 +340,15 @@ def refl_bin(binds, c1, local):
         elif e.get('samp_id') is not None: samp, sarg = SAMP_ID, e['samp_id']
         elif e.get('samp_ubo'): samp, sarg = SAMP_UBO, e['samp_ubo'][0] | e['samp_ubo'][1] << 8
         flags = (1 if e.get('arrayed') else 0) | (2 if e.get('ms') else 0) | (4 if e.get('rw') else 0) | (8 if e.get('fetch1d') else 0)
-        out.append(struct.pack('<BBBBHHhBBii', kind, DESC.get(e['type'], 255), 0xff if e.get('dim') is None else e['dim'], flags, e['binding'], e['count'],
-                               reg, samp, e.get('fmt') or 0, off, sarg))
-    return b''.join(out) + bytes(c1)
+        binding, count = e['binding'], e['count']
+        if e['kind'] in ('texd', 'sampd'): count = min(count, 32)   # the host's c2 slot array has 32 entries
+        if not 0 <= binding <= 0xffff or not 0 <= count <= 0xffff:
+            print(f'[RED] reflection binding {binding:#x} / count {count:#x} does not fit the packed reflection', flush=True)
+            continue
+        records.append(struct.pack('<BBBBHHhBBii', kind, DESC.get(e['type'], 255), 0xff if e.get('dim') is None else e['dim'], flags, binding, count,
+                                   reg, samp, e.get('fmt') or 0, off, sarg))
+    header = struct.pack('<5I', len(records), len(c1), *(list(local) + [1, 1, 1])[:3])
+    return header + b''.join(records) + bytes(c1)
 
 def remap_handles(spv, source, target, expected):
     """Remap a packed handle at stores feeding both texture and sampler array indices."""
@@ -533,6 +566,7 @@ def main():
                 try: spv = spv_post.text_patch(spv, patches[k], a.spirv_tools, w, k); print(f'{k}: patched by the profile (patches.py SPIRV)', flush=True)
                 except ValueError as e: print(f'[RED] {k}: the profile\'s SPIR-V patch was not applied, the shader is as translated: {e}', flush=True)
             binds, local, io = spirv_bindings(spv)
+            spv, binds, res = compact_bindings(spv, binds, res)
             shader_products.validate_bindings(binds, res)
             if k in handle_remaps:
                 spv = remap_handles(spv, *handle_remaps[k])
@@ -555,4 +589,7 @@ def main():
           f'{f", {stored / 2**20:.1f} MB compressed" if ver > 1 else ""}); failed: {dict(fails)}; binding kinds: {dict(kinds_all)}')
     for e, n in errs.most_common(8): print(f'  translator: {n:5d}  {e}')
 
-main()
+if __name__ == '__main__':
+    a = ap.parse_args()
+    XLATE_DLL = a.xlate or XLATE_DLL
+    main()

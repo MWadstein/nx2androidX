@@ -93,6 +93,7 @@ class ExportChecks(unittest.TestCase):
                    job_for=lambda key, stage, rec, w: ({'key': key, 'attr': {}}, b''),
                    int_inputs=lambda _: {'0': 'uint'},
                    spirv_bindings=lambda _: (self.bindings, [1, 1, 1], {1: [0, 0, 0], 3: [0, 0, 0]}),
+                   compact_bindings=lambda spv, binds, res: (spv, binds, res),
                    refl_bin=lambda cl,c1,hdr: struct.pack('<5I', 0, 0, *hdr),
                    classify=lambda *args: None)
         source = TOOLS / 'shader_vk.py'; tree = ast.parse(source.read_text())
