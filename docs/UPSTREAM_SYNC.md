@@ -17,6 +17,14 @@ and game-profile observations. It is not an ancestor of this fork; its Swift and
 Metal launcher code does not transfer to Android, so use only portable nxnative
 patches, issues and profile findings from it, with the attribution rule below.
 
+[v0lumehi/nxkit](https://github.com/v0lumehi/nxkit) is a fifth research source:
+an MIT-licensed Rust build tool and runtime for Apple silicon that runs both
+Switch and Switch 2 games. It is an independent reimplementation, not a fork of
+ours or of nxnative; its Metal 4 backend and title modules are Apple-only, so it
+is useful for Switch 2 design/progress observations and general engine ideas,
+not for direct code reuse. Switch 2 support here is a low-priority, bottom-of-list
+item while upstream implementations are still heavy work in progress.
+
 See [TECH_LINEAGE.md](TECH_LINEAGE.md) for the full stack and for the exact
 source of every borrowed fix.
 
