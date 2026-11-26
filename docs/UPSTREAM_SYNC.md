@@ -102,6 +102,27 @@ python devtools/upstream_conflict_surface.py --upstream upstream-nx2android/main
 5. Record what was considered and why it was skipped. A mechanical diff is not a to-do
    list: many upstream-only files are platform front ends or profiles that do not apply.
 
+## Cadence
+
+Do not auto-merge or copy whole trees. Sync at these points instead:
+
+- **Before a new game bring-up**: a light sweep of commit subjects in the shared area
+  that game will use (HLE, NVN/gfx, shader tools, save/audio) to catch fixes already
+  waiting. Pull only what applies to our build.
+- **When a bug appears**: search upstream for that subsystem first. The Xeno X 60 GB,
+  movie-EOS and NVN host-segment fixes were all found this way.
+- **When changing shared core code**: compare the same upstream files before and after
+  the change so we do not drift further from a fix we could have reused.
+- **Every ~25 local commits or monthly, whichever comes first**: refresh the inventory
+  counts and shortlist in this document; re-rank the top few portable fixes.
+- **On a new upstream release or a large upstream merge**: an immediate targeted review
+  of changed shared files, not a tree-wide replacement.
+- **After a device validation pass**: record which fixes are proven here and promote
+  repeated external fixes into our own profile/tooling data with attribution.
+
+Profile folders are compared on each sweep but only pulled selectively, per the table
+above. No PRs or pushes to upstream unless explicitly asked.
+
 ## Considered and skipped
 
 - `9a4a3c5f8` (stale save handles after rollback): needs upstream's canonical transaction
