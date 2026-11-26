@@ -1298,6 +1298,49 @@ class FpsLocker(unittest.TestCase):   # porter/fpslocker.py: FPSLocker-Warehouse
         self.assertIn('v_game_speed:', var_lines)
         self.assertTrue(any(l.startswith('\t.word ') for l in var_lines))
 
+    def test_declared_variables_are_aligned_for_wide_loads(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: n\n    value_type: uint32\n'
+                '    default_value: 1\n  -\n    type: variable\n    name: wide\n'
+                '    value_type: double\n    default_value: 1000000.0\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[ret]]\n')
+        img = bytearray(0x2000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend((o, lines) for o, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400), data_range=(0x1000, 0x2000))
+        var_lines = [l for o, lines in seen if o == 0x1ff0 for l in lines]
+        self.assertIn('v_n:', var_lines)
+        self.assertIn('\t.balign 8', var_lines)   # the double must not land on 0xff4
+        self.assertIn('v_wide:', var_lines)
+
+    def test_branch_labels_are_unique_between_routines_and_master_sites(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: code\n    name: first\n'
+                '    instructions: [[b, :goto1], :goto1, [ret]]\n  -\n'
+                '    type: code\n    name: second\n'
+                '    instructions: [[b, :goto1], :goto1, [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[b, :goto1], :goto1, [ret]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        labels = set(l.strip() for group in seen for l in group if l.strip().endswith(':'))
+        self.assertIn('c_first_goto1:', labels)
+        self.assertIn('c_second_goto1:', labels)
+        self.assertIn('m0_goto1:', labels)
+        got = {l for l in labels if l.endswith('_goto1:')}
+        self.assertEqual(got, {'c_first_goto1:', 'c_second_goto1:', 'm0_goto1:'})
+
     def test_refresh_rate_entry_is_skipped_not_fatal(self):
         from porter import fpsasm, fpslocker
         text = ('ALL_FPS:\n  -\n    type: write\n    address: [MAIN, 0x500]\n    value_type: int32\n    value: 2\n'

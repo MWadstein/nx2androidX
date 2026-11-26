@@ -39,8 +39,9 @@ mem_map_limit	on
 # Observed at boot: nvnDeviceSetDepthMode near=-w.
 depth_mode	gl
 
-# The engine's native interval controls its wait and elapsed-time simulation step.
-fps_target	60
+# 60 fps comes from the FPSLocker-Warehouse config of this build: its memory writes
+# and code cuts retime the engine without doubling gameplay speed. Declaring
+# fps_target here would short-circuit --fps60 to a presentation target only.
 
 # ---- Shader split ----
 shader_groups	/movie/=movie /sound/=sound

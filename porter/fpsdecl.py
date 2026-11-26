@@ -132,7 +132,7 @@ def _token(x, ctx, mem=False):
             n = x[1:-2]
             if n not in ctx.codes: raise Refused(f'undefined routine _{n}()')
             return 'c_' + n
-        if x.startswith(':'): return x[1:]     # a branch label, defined or referenced
+        if x.startswith(':'): return ctx._label_prefix + x[1:]   # a branch label, defined or referenced
         # Android traps the physical counter at EL0; the virtual counter is the EL0-readable
         # arch timer (the kernel's own vDSO uses it). Both run at the SoC's arch-timer rate.
         if ctx.mnem == 'mrs' and x == 'cntpct_el0': return 'cntvct_el0'
@@ -158,6 +158,7 @@ class Context:
         self.data_range = data_range
         self.var_addr = {n: None for n in vars_}
         self.cuts, self.notes = [], []
+        self._label_prefix = ''
         self.masters = []
         for i, e in enumerate(y.get('MASTER_WRITE') or []):
             if not isinstance(e, dict): raise Refused(f'MASTER_WRITE entry {i + 1} is not a mapping')
@@ -195,7 +196,7 @@ class Context:
         out = []
         for x in folded:
             if isinstance(x, str) and x.startswith(':'):
-                out.append(x[1:] + ':')
+                out.append(self._label_prefix + x[1:] + ':')
                 continue
             if not isinstance(x, list) or not x or not isinstance(x[0], str):
                 raise Refused(f'instruction {x!r} is not [mnemonic, operands]')
@@ -216,7 +217,10 @@ class Context:
         """Where declared cells live. The loader seals text read-only+execute, so a routine's
         str to a variable in the code cave faults; data/bss stay writable. Put the cells at the
         tail of that range (past the game's last global) and keep only routines in the cave."""
-        size = sum(_var_size(kind) for kind, _ in self.vars.values())
+        size = 0
+        for kind, _ in self.vars.values():
+            a = _var_size(kind)
+            size = (size + a - 1) // a * a + a
         if not self.data_range: return None, size   # no layout: cells share the cave (unit tests)
         lo, hi = self.data_range
         base = (hi - size) & ~7
@@ -231,6 +235,10 @@ class Context:
         at = cave if vbase is None else vbase
         var_lines = []
         for n, (kind, vals) in self.vars.items():
+            a = _var_size(kind)
+            if at % a:
+                var_lines.append('\t.balign %d' % a)
+                at += (-at) % a
             self._pass_addr[n] = self.var_addr[n] = at
             var_lines.append('v_%s:' % n)
             if _var_size(kind) == 8:
@@ -246,6 +254,7 @@ class Context:
         cave_lines = []
         at = at if vbase is None else cave
         for n, ins in self.codes.items():
+            self._label_prefix = 'c_%s_' % n
             cave_lines.append('c_%s:' % n)
             # No folded literal loads: they need a relocation the raw .text does not carry.
             cave_lines.extend(self.lines(ins, False, at=at))
@@ -256,7 +265,9 @@ class Context:
         else:
             if var_lines: sites.append((vbase, var_lines))
             if cave_lines: sites.append((cave, cave_lines))
-        sites.extend((off, self.lines(ins, False, at=off)) for off, ins, _ in self.masters)
+        for i, (off, ins, _) in enumerate(self.masters):
+            self._label_prefix = 'm%d_' % i
+            sites.append((off, self.lines(ins, False, at=off)))
         return sites
 
     def _build(self):
