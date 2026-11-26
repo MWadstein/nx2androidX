@@ -374,7 +374,7 @@ The commits before 2026-10-28 predate the rule.
 
 ## nxnative
 
-`nxnative/` started as a squashed git subtree of [seedds/nxnative](https://github.com/seedds/nxnative) (upstream 6034fca, 2026-10-24). Since 2026-10-29 it is our own fork: no `git subtree pull`, cherry-pick or merge from upstream, and the repository has no `upstream` remote (removed 2026-10-31): `origin` is the only one. Upstream's profiles are still a good reference when bringing up a game it has; read them on GitHub (`https://github.com/seedds/nxnative/tree/main/dm/games/<title ID>`) and write our own.
+`nxnative/` started as a squashed git subtree of [seedds/nxnative](https://github.com/seedds/nxnative) (upstream 6034fca, 2026-10-24). Since 2026-10-29 it is our own fork, with our own Android app and porter. The two repositories it grew from are now read-only remotes, `upstream-nxnative` and `upstream-nx2android` (both configured with `no_push` as their push URL), so we can follow their work without depending on it. See `docs/UPSTREAM_SYNC.md` for the inventory and the per-branch porting method. Upstream's profiles are still a good reference when bringing up a game it has; read them there and write our own.
 
 The Vulkan driver pipeline cache (`vk_pipeline_cache.bin` under `DM_ROOT`) now has a
 versioned envelope containing the device, driver, API and UUID identity, a renderer
