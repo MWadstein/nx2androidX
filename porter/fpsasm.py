@@ -1,0 +1,136 @@
+# Assembler-backed pieces of FPSLocker-Warehouse configs (porter/fpslocker.py).
+#
+# A config can declare variables and constants and small AArch64 routines, and its MASTER_WRITE can
+# replace instructions in main rather than just bytes. This module turns those declarations into
+# CUTS for patch_nso.py (DM_PATCHES_EXTRA) and exposes variable storage to the generated fpslock.tsv.
+#
+# There is no assembler in Python here: the NDK's clang is already part of the port's toolchain (and
+# ships inside the phone app). It assembles one file with .org at each real main offset, so ADRP and
+# branches get their real, PC-relative encodings; the .text of the object is read back by hand (no
+# objcopy on the phone). A unique marker after every site says where that site's bytes end.
+import os, re, shutil, struct, subprocess, sys, tempfile
+from pathlib import Path
+
+MAGIC = 0xDEADBEEF   # a word after each site in the object, so its code length is known
+
+
+class AsmError(Exception):
+    pass
+
+
+def clang():
+    """The AArch64 assembler: the app's toolchain first, then the NDK's, then one on PATH."""
+    t = os.environ.get('NX2A_TOOLCHAIN')
+    if t:
+        p = Path(t) / 'clang/bin/clang'
+        if p.is_file(): return str(p)
+    ndk, _ = None, None
+    try:
+        from porter import toolchain
+        ndk, _ = toolchain.find_ndk()
+    except Exception:
+        pass
+    if ndk:
+        for pre in sorted((Path(ndk) / 'toolchains/llvm/prebuilt').glob('*')):
+            p = pre / 'bin/clang'
+            if p.is_file(): return str(p)
+    p = shutil.which('clang')
+    if p: return p
+    raise AsmError('no clang assembler: the NDK or the app toolchain is needed for this config')
+
+
+def layout(path):
+    """(image, build id, executable text range, writable data range) of an NSO.
+
+    Text ends where rodata begins, including the zero padding at the end of the text page: a cave
+    in rodata would fault on instruction fetch. Declared variables that a config's code writes
+    belong in the data/bss range instead: the loader seals the code area read-only+execute, while
+    data and bss stay writable (nxnative/dm/host/loader.c). The rewriter's image includes bss, so
+    its tail is free scratch space even though nso_image() only returns the file image."""
+    from porter import fpslocker
+    d = Path(path).read_bytes()
+    if d[:4] != b'NSO0': raise AsmError(f'{path} is not an NSO')
+    segs = [struct.unpack_from('<III', d, 0x10 + i * 0x10) for i in range(3)]
+    img, bid = fpslocker.nso_image(path)
+    end = segs[1][1] if len(segs) > 1 and segs[1][1] > segs[0][1] else segs[0][1] + segs[0][2]
+    data_end = segs[2][1] + segs[2][2]
+    bss = struct.unpack_from('<I', d, 0x3c)[0]
+    # The patch area moves before the base when that would be more than 112 MB from the code;
+    # then the rewriter's image excludes bss (patch_nso.py's FAR case).
+    near = ((((data_end + bss + 0x3fff) & ~0x3fff) + 0x4000 + 0xffff) & ~0xffff)
+    writable_end = data_end if near > 0x7000000 else data_end + bss
+    return img, bid, (segs[0][1], min(end, len(img))), (segs[2][1], writable_end)
+
+
+def _terminator(image, i):
+    """Whether the word before i ends a function: ret, br, blr, b or bl. A long zero run after any
+    of these is code padding (the tail of the text page, typically), not live game data."""
+    if i < 4: return False
+    w = struct.unpack_from('<I', image, i - 4)[0]
+    return (w & 0xfffffc1f) in (0xd65f0000, 0xd61f0000, 0xd63f0000) or (w & 0xfc000000) in (0x14000000, 0x94000000)
+
+
+def cave(image, need, forbidden=(), text=None):
+    """An aligned zero run of [offset, offset+need) after a function's last instruction, free of
+    [forbidden]. Other zeroes may be live game data the engine clears at boot, so a cave there
+    would change the game's own state."""
+    bad = set()
+    for off in forbidden:
+        bad.update(range(off - 8, off + 16))
+    lo, hi = text or (0, len(image))
+    n = len(image)
+    i = lo
+    while i < hi:
+        if image[i] or i % 4:
+            i += 1
+            continue
+        j = i
+        while j < n and not image[j] and j - i < max(need + 16, 64):
+            j += 1
+        if _terminator(image, i) and j - i >= need and not any(k in range(i, i + need) for k in bad):
+            return i
+        i = max(j, i + 1)
+    raise AsmError(f'no {need}-byte run of zero padding after a ret or branch is free in main')
+
+
+def assemble(sites):
+    """[(main offset, assembly lines)] → {offset: bytes}. sites may be empty."""
+    if not sites: return {}
+    src = ['.section .text,"ax"']
+    for off, lines in sorted(sites):
+        src.append('.org 0x%X' % off)
+        src.extend(lines)
+        src.append('.word 0x%08X' % MAGIC)
+    text = '\n'.join(src) + '\n'
+    with tempfile.TemporaryDirectory(prefix='nx2a-fpsasm-') as td:
+        s, o = Path(td) / 'patch.s', Path(td) / 'patch.o'
+        s.write_text(text, encoding='utf-8')
+        env = dict(os.environ)
+        # The guest's clang is not a chroot program: it needs the rootfs's libraries.
+        libs = env.get('LD_LIBRARY_PATH')
+        if libs: env['LD_LIBRARY_PATH'] = libs
+        r = subprocess.run([clang(), '-target', 'aarch64-linux-android', '-c', str(s), '-o', str(o)],
+                           capture_output=True, text=True, env=env)
+        if r.returncode:
+            lines = [l for l in r.stderr.strip().splitlines() if l.strip()]
+            raise AsmError('clang: ' + ' | '.join(lines[-6:]) if lines else 'clang failed on: ' + text)
+        d = o.read_bytes()
+    if d[:4] != b'\x7fELF' or d[4] != 2: raise AsmError('clang wrote no ELF64 object')
+    shoff = struct.unpack_from('<Q', d, 0x28)[0]
+    shentsize, shnum = struct.unpack_from('<H', d, 0x3a)[0], struct.unpack_from('<H', d, 0x3c)[0]
+    sec = None
+    for i in range(shnum):
+        o = shoff + i * shentsize
+        if struct.unpack_from('<I', d, o + 4)[0] == 1 and struct.unpack_from('<Q', d, o + 0x20)[0] > 0:
+            sec = struct.unpack_from('<Q', d, o + 0x18)[0]   # .text offset
+            break
+    if sec is None: raise AsmError('the object has no .text')
+    body = d[sec:]
+    out = {}
+    for off, _ in sites:
+        pos = body.find(struct.pack('<I', MAGIC), off)
+        if pos < 0: raise AsmError('the marker for 0x%X is missing' % off)
+        code = body[off:pos]   # keep trailing zeroes: a label address may end in zero bytes
+        if not code.strip(b'\0'): raise AsmError('clang emitted nothing for 0x%X' % off)
+        out[off] = code
+    return out

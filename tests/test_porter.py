@@ -1,5 +1,5 @@
 # Unit tests of the port pipeline's own parts (python -m unittest discover tests). They need no game files, toolchains or device.
-import contextlib, hashlib, importlib.util, io, json, os, random, re, shutil, struct, sys, tempfile, unittest
+import contextlib, hashlib, importlib.util, io, json, os, random, re, shutil, socket, ssl, struct, sys, tempfile, unittest, urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -985,6 +985,327 @@ class FpsLocker(unittest.TestCase):   # porter/fpslocker.py: FPSLocker-Warehouse
     def test_url(self):
         from porter import fpslocker
         self.assertTrue(fpslocker.url('0100fd501f95a000', self.BID).endswith('/patches/0100FD501F95A000/D49165C05EAD8AE1.yaml'))
+
+    def test_a_missing_config_is_no_config(self):
+        from porter import fpslocker
+        missing = urllib.error.HTTPError(fpslocker.url('0100FF500E34A000', self.BID), 404, 'Not Found', {}, None)
+        with mock.patch.object(fpslocker.urllib.request, 'urlopen', side_effect=missing) as opened:
+            self.assertIsNone(fpslocker.fetch('0100FF500E34A000', self.BID))
+        self.assertEqual(opened.call_count, 1)   # a 404 is an answer, not a failure to retry
+        self.assertNotIn('python-urllib', opened.call_args.args[0].headers.get('User-agent', ''))
+
+    def test_a_dropped_handshake_is_retried(self):
+        from porter import fpslocker
+        class Reply:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return '\ufeffhello'.encode()
+        drop = urllib.error.URLError(ssl.SSLEOFError('EOF occurred in violation of protocol'))
+        with mock.patch.object(fpslocker.urllib.request, 'urlopen', side_effect=[drop, drop, Reply()]) as opened, \
+             mock.patch.object(fpslocker.time, 'sleep') as sleep:
+            self.assertEqual(fpslocker.fetch('0100FF500E34A000', self.BID), 'hello')   # the BOM is stripped as before
+        self.assertEqual(opened.call_count, 3)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [fpslocker.RETRY_WAIT, fpslocker.RETRY_WAIT * 2])
+
+    def test_a_name_that_cannot_be_resolved_is_not_retried(self):
+        from porter import fpslocker
+        dns = urllib.error.URLError(socket.gaierror(-3, 'Temporary failure in name resolution'))
+        with mock.patch.object(fpslocker.urllib.request, 'urlopen', side_effect=dns) as opened:
+            with self.assertRaises(urllib.error.URLError):
+                fpslocker.fetch('0100FF500E34A000', self.BID)
+        self.assertEqual(opened.call_count, 1)   # the proxy is missing or wrong; waiting will not fix it
+
+    def test_declarations_become_rows_and_instruction_cuts(self):
+        from porter import fpsasm, fpslocker, fpsdecl
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: dr_target\n    value_type: float\n'
+                '    evaluate: "(1 / FPS_TARGET) / VSYNC_TARGET"\n  -\n    type: const\n'
+                '    name: c\n    value: 0x3d088889\n  -\n    type: code\n    name: getDr\n'
+                '    instructions: [[adrp, x8, $dr_target], [ldr, s0, [x8, $dr_target]], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x400\n'
+                '    instructions: [[bl, _getDr()]]\n'
+                'ALL_FPS:\n  -\n    type: evaluate_write\n    address: [MAIN, 0x500]\n    value_type: float\n'
+                '    value: 1 / FPS_TARGET\n  -\n    type: write\n    address: [VARIABLE, dr_target]\n'
+                '    value_type: float\n    value: 0.0166666666\n')
+        img = bytearray(0x1000)
+        img[0x100:0x104] = b'\xc0\x03\x5f\xd6'   # ret, then 12 bytes of alignment padding
+        with mock.patch.object(fpsasm, 'assemble', side_effect=lambda sites: {o: b'\1' * 12 for o, _ in sites}):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID)
+        rows = [l.split('\t') for l in tsv.splitlines() if not l.startswith('#')]
+        self.assertEqual(rows[1][2], '0x500')
+        self.assertEqual(len(rows), 2)   # the [VARIABLE, dr_target] row is baked into the cave, not written at runtime
+        self.assertAlmostEqual(float(rows[1][4]), 1 / 60)
+        self.assertIn('declared variable', tsv)
+        self.assertEqual([c[0] for c in cuts], [0x104, 0x400])   # the cell is still baked into the cave
+        vars_, consts, codes = fpsdecl.declarations(fpslocker.parse(text))
+        self.assertAlmostEqual(vars_['dr_target'][1][60], 1 / 60)
+        self.assertEqual(consts['c'], 0x3d088889)
+        self.assertEqual(len(codes['getDr']), 3)
+
+    def test_declared_variable_rows_are_baked_not_written_at_runtime(self):
+        # A [VARIABLE, name] cell sits in the read-only executable cave. The host must not write it
+        # (hle_fpslock.c's memcpy would fault); the 60 fps value is assembled into the cave already.
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: dr\n    value_type: float\n'
+                '    default_value: 0.0166666666\n'
+                'ALL_FPS:\n  -\n    type: evaluate_write\n    address: [MAIN, 0x500]\n    value_type: float\n'
+                '    value: 1 / FPS_TARGET\n  -\n    type: write\n    address: [VARIABLE, dr]\n'
+                '    value_type: float\n    value: 0.0166666666\n')
+        img = bytearray(0x1000)
+        img[0x100:0x104] = b'\xc0\x03\x5f\xd6'   # ret, then padding
+        with mock.patch.object(fpsasm, 'assemble', side_effect=lambda sites: {o: b'\x89\x88\x88\x3c' for o, _ in sites}):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        rows = [l.split('\t') for l in tsv.splitlines() if not l.startswith('#')]
+        self.assertEqual(len(rows), 2)   # build line + the one MAIN row; the VARIABLE row is gone
+        self.assertEqual(rows[1][2], '0x500')
+        self.assertIn('declared variable', tsv)
+        self.assertIn(0x104, [c[0] for c in cuts])   # the cell is still baked into the cave
+
+    def test_a_long_zero_run_after_a_branch_is_a_valid_cave(self):
+        from porter import fpsasm
+        img = bytearray(0x1000)
+        img[0x100:0x104] = b'\x20\x02\x1f\xd6'   # br x17: the end of the text segment
+        self.assertEqual(fpsasm.cave(bytes(img), 200), 0x104)
+
+    def test_a_long_zero_run_after_live_data_is_not_a_cave(self):
+        from porter import fpsasm
+        img = bytearray(0x1000)
+        img[0xfc:0x100] = b'\xff\xff\xff\xff'   # not a function terminator
+        with self.assertRaises(fpsasm.AsmError):
+            fpsasm.cave(bytes(img), 200)
+
+    def test_cave_search_skips_rodata(self):
+        from porter import fpsasm
+        img = bytearray(0x1000)
+        img[0xfc:0x100] = b'\xc0\x03\x5f\xd6'   # ret, then the text page ends at 0x400
+        self.assertEqual(fpsasm.cave(bytes(img), 64, text=(0, 0x400)), 0x100)
+        with self.assertRaises(fpsasm.AsmError):
+            fpsasm.cave(bytes(img), 64, text=(0, 0x100))   # the only run is outside text
+
+    def test_declarations_use_only_the_text_range(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: dr\n    value_type: float\n'
+                '    default_value: 0.0166666666\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[ldr, s0, $dr]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'   # a zero run at 0x84, inside text
+        img[0xfc:0x100] = b'\xc0\x03\x5f\xd6'   # a zero run at 0x100, outside text (text ends at 0x100)
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(o for o, _ in sites)
+            return {o: b'\1' * 4 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x100))
+        self.assertEqual(tsv.count('\n'), 4)   # head, legend, build, one row (no routine => no note)
+        self.assertEqual([c[0] for c in cuts], [0x84, 0x200])
+        self.assertEqual(seen[2:], [0x84, 0x200])   # the first two sites are the measurement pass at 0x100
+
+    def test_builtin_convert_tick_routine_is_assembled_into_the_cave(self):
+        from porter import fpsasm, fpslocker
+        text = ('MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _convertTickToTimeSpan()]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'   # ret, then padding inside text
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        cave = '\n'.join(seen[0])
+        self.assertNotIn('cntfrq_el0', cave)   # Android traps that system register at EL0
+        self.assertIn('udiv', cave)            # ticks * 625 / 12 = ns on the Switch's 19.2 MHz timer
+        self.assertIn('1 routine(s)', tsv)
+        self.assertEqual([c[0] for c in cuts], [0x84, 0x200])
+
+    def test_adrp_is_kept_when_its_page_base_is_used_later(self):
+        # Folding adrp+ldr into one literal load must not drop the page base when a later
+        # instruction (here a str to the same $var) still needs it — Xenoblade 2 faulted at 0.
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: x\n    value_type: uint32\n'
+                '    default_value: 1\n  -\n    type: code\n    name: touch\n'
+                '    instructions: [[adrp, x2, $x], [ldr, x1, [x2, $x]], [str, x0, [x2, $x]], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _touch()]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        cave = '\n'.join(seen[0])
+        self.assertIn('adrp x2, 0x0', cave)
+        self.assertIn('ldr x1, [x2, 0x100]', cave)
+        self.assertIn('str x0, [x2, 0x100]', cave)
+
+    def test_adrp_operands_are_page_deltas_not_absolute_addresses(self):
+        # GAS leaves adrp operands as a page delta from the instruction (relocations are never
+        # applied to the raw .text we extract). An absolute address there points a whole page
+        # delta too high — Xenoblade 2's dynamicSpeed then read the wrong last_tick cell and the
+        # game ran at double speed. Both declared variables and plain numbers must be relative.
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: x\n    value_type: uint32\n'
+                 '    default_value: 1\n'
+                 'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x2080\n'
+                 '    instructions: [[adrp, x2, $x], [ldr, x1, [x2, $x]],'
+                 ' [adrp, x0, 0x3000], [ldr, x0, [x0, 0]], [ret]]\n')
+        img = bytearray(0x4000)
+        img[0xffc:0x1000] = b'\xc0\x03\x5f\xd6'   # ret, then a zero run in the next page
+        seen = []
+        def fake_assemble(sites):
+            seen.append(sites)
+            return {o: b'\1' * 32 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x3000))
+        master = '\n'.join(l for o, lines in seen[-1] if o == 0x2080 for l in lines)
+        self.assertIn('adrp x2, -0x1000', master)   # cave page 0x1000 from the site page 0x2000
+        self.assertIn('ldr x1, [x2, 0x0]', master)
+        self.assertIn('adrp x0, 0x1000', master)    # absolute 0x3000 from the site page 0x2000
+        self.assertIn('ldr x0, [x0, 0]', master)
+
+    def test_physical_counter_reads_use_the_virtual_counter(self):
+        # Android traps cntpct_el0 at EL0 (SIGILL on the first cave instruction in Xenoblade 2).
+        # The config's mrs must become an EL0-readable cntvct_el0, without a game-specific rule.
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: code\n    name: tick\n'
+                '    instructions: [[mrs, x0, cntpct_el0], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _tick()]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        cave = '\n'.join(seen[0])
+        self.assertNotIn('cntpct_el0', cave)
+        self.assertIn('cntvct_el0', cave)
+
+    def test_addons_and_builtin_sleep_routine_are_not_refused(self):
+        from porter import fpsasm, fpslocker
+        text = ('Addons:\n  - atmosphere/contents/0100F2C0115B6000/exefs/main.npdm\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[b, _setUserInactivityDetectionTimeExtended()]]\n'
+                'ALL_FPS:\n  -\n    type: write\n    address: [MAIN, 0x500]\n'
+                '    value_type: int32\n    value: 2\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        self.assertIn('Addon', tsv)
+        self.assertIn('not installed on Android', tsv)
+        self.assertIn('1 routine(s)', tsv)
+        self.assertEqual([c[0] for c in cuts], [0x84, 0x200])
+        self.assertEqual('\n'.join(seen[0]).count('\tret'), 1)   # no-op sleep stub
+
+    def test_float_compare_zero_immediate_is_spelled_for_gas(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: code\n    name: check\n'
+                '    instructions: [[fcmp, s0, 0], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _check()]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        self.assertIn('\tfcmp s0, #0.0', seen[0])
+
+    def test_signed_branch_immediate_is_relative_not_absolute(self):
+        from porter import fpsasm, fpslocker
+        text = ('MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[b, +12], [cbnz, w0, -4]]\n')
+        y = fpslocker.parse(text)
+        ins = y['MASTER_WRITE'][0]['instructions']
+        self.assertEqual(ins, [['b', '+12'], ['cbnz', 'w0', '-4']])   # the '+' sign survives YAML
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        self.assertIn('\tb . + 12', seen[1])
+        self.assertIn('\tcbnz w0, . - 4', seen[1])
+
+    def test_writeback_flag_attaches_to_the_memory_operand(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: code\n    name: push\n'
+                '    instructions: [[stp, x29, x30, [sp, -16], "!"], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _push()]]\n')
+        img = bytearray(0x1000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend(lines for _, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400))
+        self.assertIn('\tstp x29, x30, [sp, -16]!', seen[0])
+
+    def test_declared_variables_go_to_writable_data_not_the_code_cave(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: last_tick\n    value_type: uint64\n    default_value: 0\n'
+                '  -\n    type: code\n    name: store\n'
+                '    instructions: [[adrp, x2, $last_tick], [str, x0, [x2, $last_tick]], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _store()]]\n')
+        img = bytearray(0x2000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'   # a ret: the code cave starts after it
+        seen = []
+        def fake_assemble(sites):
+            seen.extend((o, lines) for o, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400), data_range=(0x1000, 0x2000))
+        self.assertEqual([o for o, _, _, _ in cuts], [0x1ff8, 0x84, 0x200])
+        self.assertIn('FPSLocker-Warehouse declared variables (writable data)', cuts[0][3])
+        self.assertTrue(any(l.startswith('v_last_tick:') for _, lines in seen if _ == 0x1ff8 for l in lines))
+        self.assertTrue(any('adrp x2,' in l for _, lines in seen if _ == 0x84 for l in lines))
+
+    def test_64_bit_declared_variable_gets_a_full_cell(self):
+        from porter import fpsasm, fpslocker
+        text = ('DECLARATIONS:\n  -\n    type: variable\n    name: last_tick\n    value_type: uint64\n    default_value: 0\n'
+                '  -\n    type: variable\n    name: game_speed\n    value_type: float\n    default_value: 0.03333333333\n'
+                '  -\n    type: code\n    name: store\n'
+                '    instructions: [[adrp, x2, $last_tick], [str, x0, [x2, $last_tick]], [ret]]\n'
+                'MASTER_WRITE:\n  -\n    type: asm_a64\n    main_offset: 0x200\n'
+                '    instructions: [[bl, _store()]]\n')
+        img = bytearray(0x2000)
+        img[0x80:0x84] = b'\xc0\x03\x5f\xd6'
+        seen = []
+        def fake_assemble(sites):
+            seen.extend((o, lines) for o, lines in sites)
+            return {o: b'\1' * 12 for o, _ in sites}
+        with mock.patch.object(fpsasm, 'assemble', side_effect=fake_assemble):
+            tsv, cuts = fpslocker.convert(text, bytes(img), self.BID, text_range=(0, 0x400), data_range=(0x1000, 0x2000))
+        var_lines = [l for o, lines in seen if o == 0x1ff0 for l in lines]
+        self.assertIn('v_last_tick:', var_lines)
+        self.assertTrue(any(l.startswith('\t.quad ') for l in var_lines))
+        self.assertIn('v_game_speed:', var_lines)
+        self.assertTrue(any(l.startswith('\t.word ') for l in var_lines))
+
+    def test_refresh_rate_entry_is_skipped_not_fatal(self):
+        from porter import fpsasm, fpslocker
+        text = ('ALL_FPS:\n  -\n    type: write\n    address: [MAIN, 0x500]\n    value_type: int32\n    value: 2\n'
+                '  -\n    type: write\n    value_type: refresh_rate\n    value: 30\n')
+        with mock.patch.object(fpsasm, 'assemble', return_value={}):
+            tsv, cuts = fpslocker.convert(text, bytes(0x1000), self.BID)
+        self.assertEqual(tsv.count('\n'), 5)   # head, note, legend, build, one row
+        self.assertIn('refresh_rate not applied', tsv)
 
 
 class Saves(unittest.TestCase):   # porter/saves.py: the save folders on the device, a .zip or folder to import (no device: the shell answers are made up)

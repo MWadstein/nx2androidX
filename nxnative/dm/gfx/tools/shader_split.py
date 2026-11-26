@@ -1347,6 +1347,33 @@ def hcps_shaders(d, base, label):
     span(base + table, count * 8)
     slcts, codes, ctls = (span(base + o, n) for o, n in ((slct_off, slct_size), (code_off, code_size), (ctl_off, ctl_size)))
     if not code_size and not ctl_size: return []   # source-only GLSL programs (DLC model streams), no NVN binaries to extract
+
+def slct_programs(s, xv4, xc, ctls, uc, label, strict):
+    """The programs of an SLCT (s: its bytes on): each program's stages, their code areas from xv4[xc:] and control sections from ctls[uc:], the programs following each other in both.
+    → [('var<program>', stage, control, code)]; strict: a stage that does not check is a red line, else the whole SLCT is taken for no shader (None)"""
+    _, _, _, npr, opr = struct.unpack_from('<5I', s, 4); out = []
+    for p in range(npr):
+        po, pl = struct.unpack_from('<II', s, opr + 8 * p); nv = s[po:po + pl]
+        eo, en = struct.unpack_from('<II', nv, 0x18); xe = ue = 0
+        for si, co, cl, to, tl in (struct.unpack_from('<5I', nv, eo + 20 * i) for i in range(en)):
+            if not cl: continue
+            code, ctl = xv4[xc + co:xc + co + cl], ctls[uc + to:uc + to + tl]
+            # A code area with no magic is compute when its control section's thread group (+0x748) is filled: the shared
+            # glslc_stage rule, so any game's headerless compute is read, not just a loose Monolith profile's stage 5
+            # (Xenoblade Chronicles 2's shd_effect.wishp has one; Xeno1's shd_lgt / shd_post.wishp keep the stage-5 fallback).
+            st = 'cs' if code[:4] == CS_MAGIC else sph_stage(code) if code[:4] == GFX_MAGIC else glslc_stage(ctl, code) or ('cs' if LOOSE_MONO and si == 5 else None)
+            why = 'no code area header' if not st else check(label, st, ctl, code)
+            if why and strict: red(f'{label} program {p} stage {si}: {why}')
+            if why: return None
+            out.append((f'var{p}', st, ctl, code)); xe, ue = max(xe, co + cl), max(ue, to + tl)
+        xc, uc = xc + xe, uc + (ue + 7 & ~7)   # control sections are 8-byte aligned (main's are 0x9e1, 0x87f … bytes long)
+    return out
+
+def slct_loose(d, label):
+    """SLCTs outside an HCPS, their offsets relative to the SLCT itself (Xenoblade Chronicles 3's main+0x14e01c0: three programs of the engine's own, 6 shaders, controls at +0x368, code at
+    +0x4000, used from the title screen on). Taken only when every stage checks (slct_programs), so an 'SLCT' in other data adds nothing"""
+
+
     out = []
     for i in range(count):
         s = struct.unpack_from('<I', d, base + table + 8 * i)[0]

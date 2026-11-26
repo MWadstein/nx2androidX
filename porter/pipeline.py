@@ -7,7 +7,7 @@ import collections, hashlib, importlib.util, json, mmap, os, re, shlex, shutil, 
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, datapack, dumps, fpslocker, install, memory, paths, product_cache, profiles, profiles_layer, romfs_pack, toolchain
+from porter import config, datapack, dumps, fpsasm, fpslocker, install, memory, paths, product_cache, profiles, profiles_layer, romfs_pack, toolchain
 from porter.revision import PLAYER_API_REVISION
 from porter.adb import NO_ADB, Adb, AdbError
 from porter.paths import DM, NXNATIVE
@@ -1115,7 +1115,7 @@ class Port:
             self.fps_env = ['DM_FPS_CEILING=0']; PROG.end('the game profile\'s 30 fps ceiling lifted (fps_ceiling)'); return
         if self.g.get('fps_target', '0') != '0':
             self.fps_env = ['DM_FPS_TARGET=60']; PROG.end('the game profile\'s own frame-rate cap (fps_target), at 60'); return
-        img, bid = fpslocker.nso_image(self.game / 'ExeFS/main')
+        img, bid, text_range, data_range = fpsasm.layout(self.game / 'ExeFS/main')
         src = fpslocker.url(self.g.id, bid); d = self.aw / 'fpslock'; d.mkdir(exist_ok=True); cache = d / f'{bid[:16].upper()}.yaml'
         PROG.set(step='fetching the FPSLocker-Warehouse config')
         try: text = fpslocker.fetch(self.g.id, bid)
@@ -1125,15 +1125,16 @@ class Port:
         if text is None:
             nsp.rmtree(cache); say(f'60 fps: FPSLocker-Warehouse has no config for main build {bid[:16].upper()}: no FPSLocker config applied; built-in profile patches are unaffected'); PROG.end('no external config for this build; built-in patches unaffected'); return
         cache.write_text(text, encoding='utf-8')
-        try: tsv, cuts = fpslocker.convert(text, img, bid, src)
+        try: tsv, cuts = fpslocker.convert(text, img, bid, src, text_range=text_range, data_range=data_range)
         except fpslocker.Refused as e: say(f'[RED] 60 fps: {src} cannot be applied ({e}): no FPSLocker config applied; built-in profile patches are unaffected'); PROG.end('external config not applicable; built-in patches unaffected'); return
         (d / 'fpslock.tsv').write_text(tsv, encoding='utf-8', newline='\n')
         if cuts:   # code bytes: the rewriter's cuts, applied before it rewrites main (patch_nso.py DM_PATCHES_EXTRA; part of the rewrite's reuse key)
             (d / 'patches.py').write_text(fpslocker.patches_py(bid, cuts, src), encoding='utf-8', newline='\n'); self.env['DM_PATCHES_EXTRA'] = str(d / 'patches.py')
         # FPSLocker paces the presents for its target itself, whatever interval the game asks for, so its configs leave the game's interval alone: presents follow the display (present_interval display)
-        self.fps_env = ['DM_FPS_TARGET=60', f'DM_FPS_LOCKS={datapack.files_folder(self.package)}/fpslock.tsv', 'DM_PRESENT_INTERVAL=display']
+        dest = self.data_dir() if self.o.app else datapack.files_folder(self.package)   # the phone's pack is private, not /sdcard/Android/data
+        self.fps_env = ['DM_FPS_TARGET=60', f'DM_FPS_LOCKS={dest}/fpslock.tsv', 'DM_PRESENT_INTERVAL=display']
         self.fps_files = {'fpslock.tsv': d / 'fpslock.tsv'}
-        n = tsv.count('\n') - 3
+        n = sum(1 for l in tsv.splitlines() if l and not l.startswith('#') and not l.startswith('build\t'))
         say(f'60 fps: FPSLocker-Warehouse config {src}, by masagrator and contributors: {n} memory write(s)' + (f', {len(cuts)} code cut(s)' if cuts else ''))
         PROG.end(f'{n} memory write(s)' + (f', {len(cuts)} code cut(s)' if cuts else ''))
 
