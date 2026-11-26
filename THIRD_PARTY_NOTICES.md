@@ -34,6 +34,7 @@ describes what every one of them is, which version it is and where it is used.
 | The cheat engine (the Atmosphère dmnt cheat VM), ported from the sibling host's engine (the BananaNative repository) | MIT, Copyright (c) 2026 seedds | `nxnative/dm/host/hle_cheats.c` | in the file header |
 | The layout size algorithm ported from deko3d | zlib, Copyright (C) 2018-2020 fincs | `nxnative/dm/gfx/nvn/nvn_tex.c` | in the file header |
 | Two adaptations from MacNativeGames (MIT) | MIT | `nxnative/dm/gfx/nvn/nvn_mtl.m`, `nxnative/dm/gfx/tools/dmsh_xlate/Program.cs` | `nxnative/dm/third_party/macnativegames/LICENSE` |
+| Ampere shader reader, `Program.cs` fields and translator assemblies from [peanuts-native](https://github.com/igawa6/peanuts-native) (igawa6), itself on Banana Native and seedds/nxnative; the Ampere decoder descends from switch2mac/`nx2_lower` (Eglantine) | MIT for peanuts' MIT files, GPL-3.0-or-later for the Ampere decoder and the combined translator | `nxnative/dm/gfx/tools/dmsh_ampere.py`, `nxnative/dm/gfx/tools/dmsh_xlate/Program.cs`, `nxnative/dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Decoders/`, `nxnative/dm/gfx/tools/dmsh_xlate_bin/` | peanuts `LICENSE` / `android/NOTICE.md`; switch2mac/Eglantine GPL notice recorded in `nxnative/dm/gfx/tools/dmsh_xlate_bin/NOTICE.md` |
 | `stb_image.h` (2.23), `stb_image_write.h` (1.13), `tinyexr.h` | MIT / public domain | `nxnative/dm/third_party/flip/tool/` | in each file's header |
 | DroidSansFallbackFull | Apache-2.0 | `nxnative/dm/tools/DroidSansFallbackFull.ttf` | `nxnative/dm/tools/DroidSansFallbackFull.NOTICE` |
 | OpenSans-Regular | Apache-2.0 | `nxnative/dm/tools/OpenSans-Regular.ttf` | `nxnative/dm/tools/OpenSans-Regular.NOTICE` |
@@ -52,7 +53,7 @@ with them.
 
 | Component | License | Where it ships | License text |
 |---|---|---|---|
-| The shader translation tool `dmsh_xlate` and its .NET dependencies (Humanizer, MessagePack, Gommon, Microsoft.IO.RecyclableMemoryStream, System.CodeDom) | MIT | `nxnative/dm/gfx/tools/dmsh_xlate_bin/` | `nxnative/dm/gfx/tools/dmsh_xlate_bin/NOTICE.md` and `LICENSES/` beside it |
+| The shader translation tool `dmsh_xlate` and its .NET dependencies (Humanizer, MessagePack, Gommon, Microsoft.IO.RecyclableMemoryStream, System.CodeDom). The committed assemblies are peanuts-native's locked build; the combined work is GPL-3.0-or-later because of the Ampere decoder. | MIT for the individual libraries, GPL-3.0-or-later for the combined translator | `nxnative/dm/gfx/tools/dmsh_xlate_bin/` | `nxnative/dm/gfx/tools/dmsh_xlate_bin/NOTICE.md` and `LICENSES/` beside it |
 | `nx_extract` (the NSP reader) and LibHac 0.19.0 | GPL-3.0-or-later (its own code); LibHac is MIT | built from `nxnative/dm/tools/nx_extract/`, restored from NuGet | the repository's [LICENSE](LICENSE); the LibHac package is MIT |
 | The .NET runtime the phone app ships | MIT | the app's environment archive (`payload.pkg`, at `tool/toolchain/dotnet`) | the .NET runtime's own terms, fetched from Microsoft |
 
