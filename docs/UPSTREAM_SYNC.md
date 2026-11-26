@@ -10,7 +10,14 @@ repositories it grew from. Both are now read-only remotes:
 
 [peanuts-native](https://github.com/igawa6/peanuts-native) is a third source of
 generic fixes. It is a sibling Android fork on Banana Native, not a descendant of
-ours. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for the full stack and for the exact
+ours. [LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple) is a fourth research
+source: an MIT-licensed Swift launcher/community fork of `seedds/nxnative` for
+iPhone/iPad/Mac. It has the same engine core but its own front end, build seeds
+and game-profile observations. It is not an ancestor of this fork; its Swift and
+Metal launcher code does not transfer to Android, so use only portable nxnative
+patches, issues and profile findings from it, with the attribution rule below.
+
+See [TECH_LINEAGE.md](TECH_LINEAGE.md) for the full stack and for the exact
 source of every borrowed fix.
 
 Neither remote is ever pushed to. Work is committed to organized local branches; there
