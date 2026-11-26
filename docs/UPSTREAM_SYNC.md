@@ -123,6 +123,30 @@ Do not auto-merge or copy whole trees. Sync at these points instead:
 Profile folders are compared on each sweep but only pulled selectively, per the table
 above. No PRs or pushes to upstream unless explicitly asked.
 
+## Local workflow
+
+`integration/all-fixes` is the working base, equivalent to "main" for this
+single-person fork. Keep it clean and pushed to `myfork` before starting a new
+piece of work. Do the work in a separate worktree so the base checkout stays
+untouched:
+
+```
+git fetch myfork upstream-nxnative upstream-nx2android
+git worktree add ../nx2androidx-worktrees/fix/<name> -b fix/<name> integration/all-fixes
+# edit, add tests, run the Python/arch/Kotlin checks, validate on the device
+git -C ../nx2androidx-worktrees/fix/<name> commit -m "fix(<area>): ..."
+git merge --no-ff fix/<name> -m "chore: fold <name>"
+git push myfork integration/all-fixes
+git worktree remove ../nx2androidx-worktrees/fix/<name>
+```
+
+Before merging, confirm the branch contains exactly the intended commits and
+that the base has no uncommitted changes. After merging, run the checks again
+on the base. If shared runtime C changed, bump `PLAYER_API_REVISION`, rebuild
+the APK from `integration/all-fixes`, install it, and let the device rebuild
+game runtimes. Build from the base branch, never from a feature worktree, so a
+fix cannot exist only in a branch.
+
 ## Considered and skipped
 
 - `9a4a3c5f8` (stale save handles after rollback): needs upstream's canonical transaction
