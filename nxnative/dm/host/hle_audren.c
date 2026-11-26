@@ -350,8 +350,8 @@ static void *plt_target(const uint32_t *pc) {   // adrp x16, page; ldr x17, [x16
     uint64_t page = ((uint64_t)pc & ~0xfffull) + (uint64_t)imm;
     return *(void **)(page + ((l >> 10) & 0xfff) * 8);
 }
-static int update_lock(size_t *off, int *os_mutex) {
-    const uint32_t *f = guest_sym("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm");
+static int lock_in(const char *fn, size_t *off, int *os_mutex) {
+    const uint32_t *f = guest_sym(fn);
     void *lock_mutex = guest_sym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"), *sdk_lock = guest_sym("_ZN2nn2os12SdkMutexType4LockEv");
     if (!f) return 0;
     uint32_t self = 1u << 0; int64_t add[32]; for (int r = 0; r < 32; r++) add[r] = -1;
@@ -372,6 +372,14 @@ static int update_lock(size_t *off, int *os_mutex) {
     }
     return 0;
 }
+// From SDK 19 the lock moved from Update into UpdateImpl (+0x2d0, +0x2d8 in SDK 22).
+// Try both: a fixed guess may write a lock word into an unrelated field and exclude nothing (upstream 521906039).
+static int update_lock(size_t *off, int *os_mutex) {
+    if (lock_in("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm", off, os_mutex) ||
+        lock_in("_ZN2nn5audio6server17AudioRenderSystem10UpdateImplEPvmS3_mPKvm", off, os_mutex)) return 1;
+    LOG("[RED] audren: no update lock read off AudioRenderSystem::Update or UpdateImpl: keeping +%#zx", *off);
+    return 0;
+}
 static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     static int (*mode)(void *), (*device)(void *); static uint8_t *(*cbuf)(void *); static size_t (*cbsz)(void *), (*gen)(void *, void *, size_t);
     static span_t (*gen20)(void *, void *, size_t); static size_t mu_off;
@@ -386,7 +394,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
         mu_off = gen20 ? 0x2d0 : 0x1f0; g_sink_id = gen20 ? 0x14 : 0x13;
         int os_mutex = 0;
         // SdkMutexType is looked up only when the SDK uses it: SDK 3.5.1 has none (OCTOPATH TRAVELER: LockMutex at +0x1f8)
-        if (!gen20 && update_lock(&mu_off, &os_mutex) && os_mutex) { lock = gsym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"); unlock = gsym("_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE"); }
+        if (update_lock(&mu_off, &os_mutex) && os_mutex) { lock = gsym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"); unlock = gsym("_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE"); }
         else { lock = gsym("_ZN2nn2os12SdkMutexType4LockEv"); unlock = gsym("_ZN2nn2os12SdkMutexType6UnlockEv"); }
         LOG("audren: AudioRenderSystem in the SDK %s layout (update lock %s at +%#zx)", gen20 ? "20" : "16", os_mutex ? "nn::os::MutexType" : "SdkMutexType", mu_off);
         tmax = gsym("_ZN2nn5audio3dsp20CommandListProcessor17SetProcessTimeMaxEj"); setup = gsym("_ZN2nn5audio3dsp20CommandListProcessor5SetupEPKvm");
