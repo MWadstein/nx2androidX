@@ -49,3 +49,63 @@ Update 1.5.12620 (v589824) over the base game, SDK 20.5.21. Unity 6000.0.61f1 IL
 - Sound is checked only in the log (one AudioOut, no underruns): nobody has listened to it. Input has gone only through `DM_CTL`, not a controller or the keyboard.
 - Dirtmouth and everything past King's Pass. Precise platforming through `DM_CTL` was impractical, so no door between rooms has been crossed here, and memory in later areas is not measured.
 - The base game alone (v0) was not played or registered; packing it takes a derived profile.
+
+
+<!-- upstream-nxnative README: upstream-nxnative/main -->
+
+## Upstream bring-up history (seedds/nxnative)
+
+# Hollow Knight (`0100633007D48000`)
+
+Update 1.5.12620 (v589824) over the base game, SDK 20.5.21. Unity 6000.0.61f1 IL2CPP with FMOD (one AudioOut) on NVN. Modules `main`, `subsdk0` (the SDK's movie library, for the MP4 cinematics) and `sdk`. Plays on the Mac: the title, a new game, the prologue text and opening cinematic, then King's Pass: walking, jumping, nail attacks, breaking its walls, killing crawlids, geo, damage, death, the shade, respawning, and a save loaded after a restart. No game-specific rewriter cut and no host change of its own. iPhone and iPad validation remains open.
+
+## What it needs
+
+| Setting | Where | Why |
+|---|---|---|
+| `sys_resource 0x1000000` | [`game.tsv`](game.tsv) | the NPDM's 16 MB of system resource: virtual address memory |
+| 5 GB guest layout with the hardware pool: `mem_reserve 0x140000000`, `mem_alias 0x118000000`, `mem_stack 0x10000000`, `app_pool 0xCD500000` | `game.tsv` | the block of the other Unity games with virtual address memory; see [Memory](#memory) |
+| `depth_mode zero` | `game.tsv` | the game sets near = 0 at startup (log: `depth mode near=0`), so the pipeline bases made before it runs take the `main0_z` vertex entries; with the default `gl`, the prebuild's bases are for the wrong entry and go unused |
+| `shader_groups /Data/=data` | `game.tsv` | everything is under `Data/`: the player's serialized files and the `StreamingAssets` bundles |
+| `fps_target 60`, `fps_max 120` | `game.tsv` | **Frame rate** defaults to 60 and offers 120 on 120 Hz screens (tested on Mac; iPhone and iPad open): speed measured below; see [Frame rate](#frame-rate) |
+| No `pad_layout` (the 2D default) | `game.tsv` | B jumps, Y attacks, A confirms in menus |
+
+## Frame rate
+
+- **60 fps, as the game asks, with a 120 fps option** (`fps_target 60`, `fps_max 120`; tested on Mac, iPhone and iPad validation open). The rewriter finds Unity's `QualitySettings.vSyncCount` and `Application.targetFrameRate` through the internal-call table with no build ID (on 1.5.12620: `UNITY_TARGET_FPS` `main+0x63aeb60`, `UNITY_QS_PTR` `main+0x66c7618`, vSyncCount at `+0x20` + `+0x64` * 0x100 + `+0x88`), and the host writes the target there ([Unity's vSyncCount and targetFrameRate](../../../docs/reference/frame-rate.md#unitys-vsynccount-and-targetframerate-found-through-the-internal-call-table)); at 120 the log reads `Unity Application.targetFrameRate 60 → 120 fps (DM_FPS_TARGET)`. While the opening cinematic plays it asks for present interval 2; with `fps_target 60` or `120` the host presents at 60 fps during movies (`120 → 60 fps (movie playing)`), and every movie stays at its own picture rate whatever the target.
+- **Speed:** Unity steps the game by the time that really passed. From a fresh save, the same route (A on Start Game, A on the first slot, A, then right held from 165 s, through the prologue and the opening cinematic into King's Pass) was run twice at 60 and twice at 120 on an M5 Max (macOS 27.0), with a screenshot each second while right was held: at each second the Knight stands at the same place in all four runs, and the opening credit names fade on the same schedule. Frame against frame, the 120 runs are within 62 px of the first 60 run horizontally, the second 60 run within 73 px of it, and all four stop at the first vine wall by 169 s. The game's credits are a movie (30 fps whatever the target), so they cannot time it.
+- **Measured at 120** (windowed, 120 Hz screen, the 4 s walk): 116 fps, frame time p50 8.33 ms, p95 8.41 to 8.43 ms, GPU about 1.16 ms a frame; at 60, p50 16.67 ms. Only King's Pass was played at 120; later areas, combat and bosses were not checked at that rate.
+- With a window, on the title: frame time p50 16.67 ms, p95 16.70 ms, max about 16.9 ms, with one 189 ms frame early in the title's load.
+- Windowless, the fixed 60 Hz timer shows p95 up to 20 ms on the title and after a respawn, against 16.77 ms in other stretches of the same run. The window's numbers show that this does not reach the screen, so compare frame times only between runs of the same kind.
+
+## Memory
+
+- As in [Hollow Knight: Silksong](../010013C00E930000/README.md#memory): `main` never sets a heap and the log shows no StandardAllocator; Unity maps its memory itself in the alias region. See [Unity 6 takes its memory with no StandardAllocator and no heap](../../../docs/reference/memory.md#unity-6-takes-its-memory-with-no-standardallocator-and-no-heap).
+- The node area takes the SDK-wide function-matched cut on `sdk+0x145d0c` / `+0x145d78` (`dm/tools/sdk_patches.py` `MATCH_CUTS`).
+- Measured on the Mac in King's Pass over an 8-minute run with a death and respawn: the alias region's high-water mark +1.75 GB of 4.38 GB, 1.25 GB mapped; resident about 1.5 to 1.56 GB and 0.83 to 0.86 GB of GPU memory in play. A run from a loaded save stayed in the same range (+1.51 GB, resident 1.55 GB, 0.9 GB of GPU memory). Later areas are not measured.
+
+## Files and shaders
+
+- The merged RomFS has 1,641 files, 3.46 GB: serialized assets, 228 FMOD banks and 16 MP4 movies.
+- 1,812 shaders from the `Shader` objects of `data.unity3d` and the UnityFS bundles, read by `unityfs.py`; `main` also holds 11 GLSLC outputs of Unity's player.
+- The prebuild makes 858 pipeline bases from 873 shader pairs on the Mac: none fail, 15 are left to the draws.
+- `pso_manifest.tsv` has 110 lines, recorded along the route below and through a save load.
+
+## Mac routes
+
+- Build with `scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> --platform mac` and use its printed command.
+- From a fresh save, the title is up by about 25 s. A on Start Game, A on the first slot, then the prologue text and the opening cinematic (about two minutes; skipping was not tried) lead to King's Pass.
+- In King's Pass, hold right. Walls of vines block the way until struck with Y (five strikes were always enough). Then there are a pit (B to jump out) and crawlids.
+- A save written there loads with A, A from the title and returns to King's Pass.
+
+## Found on this game
+
+- [The prepare step inside the shader map's once](../../../docs/reference/shaders.md#the-prepare-step-inside-the-shader-maps-once): the crash at the first program with a window, already found and fixed on other games; this port added the kept prefetch items and the test.
+- Existing [Unity 6 Shader objects](../../../docs/reference/shaders.md#unity-6-shader-objects) and the node area's [function-matched cut](../../../docs/reference/memory.md#the-sdks-address-region-node-area) work without another change.
+
+## Open
+
+- iPhone and iPad runtime validation; no IPA has been built.
+- Sound is checked only in the log (one AudioOut, no underruns): nobody has listened to it. Input has gone only through `DM_CTL`, not a controller or the keyboard.
+- Dirtmouth and everything past King's Pass. Precise platforming through `DM_CTL` was impractical, so no door between rooms has been crossed here, and memory in later areas is not measured.
+- The base game alone (v0) was not played or registered; packing it takes a derived profile.
