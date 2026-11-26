@@ -47,6 +47,35 @@ rewrite outputs, so a completed rewrite need not run again for a different limit
 
 The data pack (`NeoTheWorldEndsWithYou-data/`) appears in the game folder (`-o` picks another); the phone app runs the game from it. `python -m porter install <App>-data` installs a port made earlier; with `--romfs-at <folder on the device>` the app reads the game's RomFS from a folder already there (an emulator's dump of the same version) instead of a copy in its files folder ([ARCHITECTURE.md](ARCHITECTURE.md#the-port)). The first port takes a while (extraction, rewriting the game's code, translating its shaders); later ones reuse what has not changed. `python -m porter -h` lists the commands.
 
+### Fast local build loop (Windows)
+
+`devtools/build_apk.cmd` (a shim for `build_apk.ps1`, so no execution-policy
+change is needed) wraps the machine-specific parts of
+`packaging/android-apk/build_apk.sh`: Git Bash, `ANDROID_HOME`, the Android
+Studio JBR, and the **prebuilt** C# tools and adrenotools under
+`packaging/android-apk/.cache/`. It points `NX2A_CACHE` at the main checkout's
+cache, so a worktree does not download a second NDK/rootfs; `build_apk.sh`
+accepts that variable. The wrapper also removes `.cache/debs` before a full
+build, because Windows' `tar_filter` can trip over stale POSIX symlinks.
+
+```
+devtools\build_apk.cmd                         :: full debug build
+devtools\build_apk.cmd -NoPayload              :: Kotlin/UI-only change: skip rootfs/assets
+devtools\build_apk.cmd -Install -TransportId 1
+```
+
+`-NoPayload` is only safe when the phone already has the environment and no
+`nxnative/`, Python tool or driver changed; it still rebuilds the APK. Use a
+transport id or serial with `-Install` when more than one device is attached,
+so the other device is left alone.
+
+Iteration cost is dominated by shader translation, not the APK: the bundle key
+includes `shader_vk.py`, so changing it re-translates every shader. Batch shader
+tool changes, and keep the base and update NSPs staged in the app's own
+`files/xfer/` on the device so a re-port does not copy 14 GB from shared storage
+each time. Run targeted tests during iteration; the full suite includes a few
+pre-existing environment-only failures (dotnet/SDK and a stale docs table).
+
 ### Saves
 
 `porter saves` does what the app's **Saves** tab does (see the README's [Saves](../README.md#saves)):

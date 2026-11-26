@@ -15,7 +15,9 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 root=$PWD
 here=$root/packaging/android-apk
-cache=$here/.cache
+# Worktrees are cheap, but each one would otherwise download its own NDK, rootfs and drivers.
+# One cache shared by all worktrees of a checkout is the intended default for local builds.
+cache=${NX2A_CACHE:-$here/.cache}
 variant=${1:-debug}
 # --no-payload: only the app, without the rootfs and the build tools (the phone already has them unpacked)
 payload_flag=""
