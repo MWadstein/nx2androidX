@@ -69,7 +69,7 @@ Android behavior. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for attribution.
 | `shader_pairs.tsv` | Shared format, not an Android runtime input | Pipeline pairs for the Apple chain's build-time pairing; Android records `vk_pipelines.bin` at runtime instead. Kept for profile parity and chain inputs. |
 | `pso_manifest.tsv` | No (legacy here) | Apple's prewarm seed list. Android prewarms from the per-pack pipeline records, so this is not read by our host. |
 | `bf_want.tsv` | No direct Android use | Apple chain's rewritable-sample variant list; declared as a chain input but not used by `shader_vk.py`. |
-| `README.md` | No (provenance) | Upstream's bring-up history: tested builds, allocator/memory evidence, rendering and stability findings. Kept as reference and attributed to its source; our gallery/checklist are generated from `android.tsv` by `docs/gen_tables.py`. Do not overwrite a README we wrote for Android (for example Xeno X). |
+| `README.md` | No (provenance) | Local game page plus appended `seedds/nxnative` bring-up history where it exists: tested builds, allocator/memory evidence, issues and stability findings. `devtools/append_upstream_readmes.py` appends it under a marker and is idempotent; it never overwrites the local page. Our gallery/checklist are generated from `android.tsv` by `docs/gen_tables.py`. |
 
 Example checked on `010074F013262000` (Xenoblade Chronicles 3): `game.tsv`, all
 shader tables, `.conflicts`, `shader_pairs`, `pso_manifest`, `bf_want` and
@@ -78,6 +78,9 @@ adds `graphics nvn` and a `readme_note` row; those are our Android metadata and
 should be kept. Upstream's `README.md` is now kept here too: it records the compact
 4 GB / 512 MB arena trade-off, issue #3149 and the open Zstd worker crash — history
 worth preserving as research, but not a substitute for our own validation.
+The fuller `seedds/nxnative` README is appended below the local page; it records
+issue #3149's 4 GB / 512 MB compact-layout exhaustion, the 60 GB restoration on
+large alias regions, and the still-open Zstd worker crash.
 
 On each sweep, check which upstream READMEs are missing or stale before deciding
 what to pull:

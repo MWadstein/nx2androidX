@@ -36,3 +36,73 @@ Read the profile's porting log in the comment header of [`android.tsv`](android.
 ## Quirks and known issues
 
 - Not recorded.
+
+
+<!-- upstream-nxnative README: upstream-nxnative/main -->
+
+## Upstream bring-up history (seedds/nxnative)
+
+# Hollow Knight: Silksong (`010013C00E930000`)
+
+Update 1.0.30000 (v655360) over the base game, SDK 20.5.8. Unity 6000.0.50f1 IL2CPP with FMOD (one AudioOut) on NVN. Modules `main`, `subsdk0` (the SDK's movie library, whose `movie::Extractor` demuxes the 27 MP4 cinematics, H.264 and AAC; `Intro_Cinematic.mp4` after a new file) and `sdk`. Plays on the iPhone. On the Mac: the logos, the title, a new file, the intro poem, the opening cinematic with its sound, and Hornet under control in the first two rooms of Moss Grotto (bind, jump, attack), with music and sound, at 60 fps as on the Switch (30 while a cinematic plays, as the game asks); memory flat in play. The base game alone (1.0.27776: another `main`, the same `sdk` and movie module) packs from a derived profile with its own 2,244 shaders and plays the same opening on the Mac with no red line.
+
+## What it needs
+
+| Setting | Where | Why |
+|---|---|---|
+| Node area cut 1 GB → 62 MB | the SDK-wide rule in `dm/tools/sdk_patches.py` (the constructor at `sdk+0x145bec`; the movs at `+0x145bfc` and `+0x145c68`) | Unity 6's address regions start after the node area: +3.00 GB of the alias region in the first room without it, +2.26 GB with it; see [Memory](#memory) |
+| `sys_resource 0x1000000` | [`game.tsv`](game.tsv) | the NPDM's 16 MB of system resource: virtual address memory |
+| 5 GB guest layout with the hardware pool: `mem_reserve 0x140000000`, `mem_alias 0x118000000`, `mem_stack 0x10000000`, `app_pool 0xCD500000` | `game.tsv` | the block of the other Unity games with virtual address memory (256 MB in front + 4.375 GB alias region + 256 MB stack region + 128 MB heap region); the pool is the hardware's (3.2 GB): Unity only reads it through `QueryMemoryInfo`, and nothing maps against it |
+| `nn::hid::GetDebugPadStates` | host, `hle_hid.c` (every game) | an `nn::diag` abort in the first frames; see [Services](#services) |
+| `shader_groups /Data/=data` | `game.tsv` | everything is under `Data/`: the player's serialized files and the `StreamingAssets` bundles |
+| `fps_target 60`, `fps_max 120` | `game.tsv` | **Frame rate** defaults to 60 and offers 120 on 120 Hz screens (tested on Mac; iPhone and iPad 120 fps open): speed measured below; see [Frame rate](#frame-rate) |
+| No `pad_layout` (the 2D default) | `game.tsv` | A binds, B jumps, Y attacks; see [Input](#input) and [Open](#open) |
+
+## Frame rate
+
+- **60 fps, as on the Switch, with a 120 fps option** (`fps_target 60`, `fps_max 120`; tested on Mac, iPhone and iPad 120 fps validation open). The rewriter finds Unity's `QualitySettings.vSyncCount` and `Application.targetFrameRate` through the internal-call table with no build ID (on 1.0.30000: `UNITY_TARGET_FPS` `main+0x8020db0`, `UNITY_QS_PTR` `main+0x8340b08`; on the base game 1.0.27776: `main+0x7a23f70`, `main+0x7d42f48`), and the host writes the target there ([Unity's vSyncCount and targetFrameRate](../../../docs/reference/frame-rate.md#unitys-vsynccount-and-targetframerate-found-through-the-internal-call-table)); at 120 the log reads `Unity Application.targetFrameRate 60 → 120 fps (DM_FPS_TARGET)`. While a cinematic plays the game draws 1280x720 with a window crop and asks for present interval 2; with `fps_target 60` or `120` the host presents at 60 fps during movies (`120 → 60 fps (movie playing)`), and movies keep their own picture rate.
+- **Speed:** Unity steps the game by the time that really passed. The credits (title menu, Up, A; no presses after) scroll by the game's clock, and on 1.0.30000 two runs at 60 and two at 120 on an M5 Max (macOS 27.0) show the same names at the same second from 100 to 116 s, frame against frame within 35 px of the first 60 run where the second 60 run is within 39 px of it. On 1.0.30000 headless on an Apple M6, the same fresh-save route through the opening cinematic, Bind and a 3 s walk left in Moss Grotto reaches Bind between 184 and 186.5 s and places Hornet at the same spot mid-walk and at the ledge at both 60 (60.0 fps, p50 16.62 ms) and 120 (119.0–120.0 fps, p50 8.27 ms, GPU 2.25 ms, 0 `[RED]` lines; movies capped to 60 fps and decoded in matching 20.0 s windows). On the base game 1.0.27776 the credits check gave 43 px/s at 60 and 44 px/s at 120, and the game was played at 120 there, moving, jumping and attacking at the right speed.
+- **Measured at 120** (windowed, 120 Hz screen, 1.0.30000, the credits): 118.7 to 118.9 fps, frame time p50 8.33 ms, p95 8.46 ms, GPU about 1.45 ms a frame; at 60, p50 16.67 ms. Later areas and bosses were not checked at 120.
+- **Resolved: an idle job worker kept a performance core awake.** Unity's job workers sleep 25 µs between looks at their queue (`main+0xbd99e0`), about 25,000 host wakeups a second, and on the iPhone the game ran on performance cores and warmed the phone more than heavier games. Those sleeps now back off like other polls: [Short sleeps are polls](../../../docs/reference/threads.md#short-sleeps-are-polls) (iPhone Duo: CPU energy 0.63 → 0.09 W, on efficiency cores). Open: dropped frames went from 0.17% to 0.25% in the comparison (different routes), as short hitches of 2 to 6 frames.
+
+## Memory
+
+- 16 MB of system resource (virtual address memory) and no heap: Unity 6's `nninitStartup` (`main+0x118cb70`) only calls `QueryMemoryInfo` and `SetMemoryAllocatorForThreadLocal`, so it sets up no StandardAllocator, and nothing aborts at startup as with 2022.3. Unity's own allocator reserves address regions with `nn::os::AllocateAddressRegion` and commits pages with `AllocateMemoryPages` in the alias region.
+- **Resolved: the provisional profile's block was far too small.** `main` imports no `SetMemoryHeapSize`, and the provisional profile took that for a game living in its bss (a 1 GB block, 256 MB of alias region) while Unity maps 1.5 GB in the first room. `profile_guess.py` now gives every game with an NPDM system resource the 5 GB block (Absolum and Pokémon Legends: Z-A, heapless too, came out right with it).
+- **Current:** the node area still sits at the start of the alias region, so it takes the cut: without it the high-water mark was +1.00 GB at `nninitStartup` and +3.00 GB in the first room of play; with it +2.26 GB, 1.51 GB mapped.
+- Measured on the Mac: resident about 2.1–2.15 GB and 1.25 GB of GPU memory, flat for 100 s of play.
+- BALL x PIT ([010086A022444000](../010086A022444000/README.md), Unity 6000.0.62f1, SDK 20.5.19) takes its memory the same way and needed only the same cut on its `sdk` build.
+- Since 2026-11-09 the SDK-wide rule gives the node area cut in place of this `sdk` build's row: the rewritten `sdk` is byte-identical (SDK 20's placement aligns to 2 MB itself).
+
+## Services
+
+- **Resolved: an `nn::diag` abort with Result 0x2aca in the first frames of `nnMain`** (`bt: sdk+0x514580 main+0x1296c64 …`). `main+0x1296c60` calls `hid::GetDebugPadStates(states, 16)` every frame, and the SDK's own reads a debug pad resource nothing initialized (module 202, hid). The host had only the single-state `GetDebugPadState`; the history form now answers every requested entry as not connected, newest first with consecutive sampling numbers (`hle_hid.c`).
+
+## Input
+
+- A binds, B jumps, Y attacks (the game's own prompts name A and B). It stays docked at 1920x1080 with the 2D pad layout. Whether it reads touch in handheld mode has not been tried.
+
+## Files and shaders
+
+- Nearly everything is in 2,068 Addressables bundles (`StreamingAssets/aa/Switch`).
+- 2,450 stage shaders: 1,189 vertex, 1,193 pixel, 67 compute and one geometry shader (which does not build), 11 of them the player's own GLSLC outputs in `main`.
+- The bundles carry their type trees (they report the engine version `0.0.0`, Unity's stripped version string), so `unityfs.py` read Unity 6's `Shader` objects with no layout written out.
+
+## Mac routes
+
+- From a fresh save, `DM_KEYS="f1600:A,f1900:A,f2200:A,f2500:A,f2800:A,f9400:A~1.5,f9700:LLeft~60,f9800:B~0.5*60/50,f9830:Y*60/50"` starts a new file in slot 1, plays the poem and the opening cinematic (control at about frame 9,200), binds, and walks left into the second room (its "B Jump" prompt), jumping and attacking as it goes.
+
+## Found on this game
+
+General host changes first needed here; each applies to every game:
+
+- **`hid::GetDebugPadStates`**, the history form (`hle_hid.c`): [History reads fill every requested entry](../../../docs/reference/services.md#history-reads-fill-every-requested-entry).
+- **Unity 6 memory with no StandardAllocator and no heap**, and the NSP script's 5 GB block for every game with an NPDM system resource (`profile_guess.py`): [Unity 6 takes its memory with no StandardAllocator and no heap](../../../docs/reference/memory.md#unity-6-takes-its-memory-with-no-standardallocator-and-no-heap), [dm/games/README.md, Adding a game](../README.md#adding-a-game).
+- **Unity 6 `Shader` objects** read from the bundles' own type trees: [Unity 6 Shader objects](../../../docs/reference/shaders.md#unity-6-shader-objects).
+- **Short sleeps of an idle job worker** (`hle_thread.c`): [Short sleeps are polls](../../../docs/reference/threads.md#short-sleeps-are-polls).
+
+## Open
+
+- The pad layout disagrees: the profile has no `pad_layout` (the default `simple`, 2D) and the notes say 2D, but README.md's touch-controls paragraph does not list this game among those that start in 2D.
+- Whether it reads touch in handheld mode has not been tried.
+- The one geometry shader does not build.
