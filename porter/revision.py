@@ -25,8 +25,11 @@ failed commit) until it is rebuilt, so every pack's runtime is rebuilt on the ne
 installed runtimes need rebuilding so their host rejects the old caches instead of reusing stale driver records.
 11: a queue keeps the raster origin captured when it was created; installed runtimes need rebuilding for the winding
 fix to apply.
+12: generic upstream host fixes reached the shared C core: movie inputs sent after EOS are returned without decoding,
+NVN host-lent command segments are sized by the request, and the audio update lock is read from UpdateImpl on SDK 19+.
+Installed runtimes need rebuilding so these fixes reach games.
 """
-PLAYER_API_REVISION = 11
+PLAYER_API_REVISION = 12
 
 # The game profiles the player imports (a package of nxnative/dm/games/<title ID>/ folders) into their own folder: what the package was cut from.
 # PROFILES_REVISION counts the syncs of upstream's profiles (1: the first sync, seedds/nxnative at PROFILES_COMMIT); PROFILES_COMMIT is the upstream commit the
