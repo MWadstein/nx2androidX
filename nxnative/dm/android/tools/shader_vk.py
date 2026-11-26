@@ -15,6 +15,10 @@ HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent.parent / 'gfx/tools'
 sys.path[:0] = [str(TOOLS), str(HERE)]
 import dmsh_facts, dmsh_chain, dmsv, dmsh_ampere, shader_products, spv_half, spv_precise, spv_texture_offsets, spv_post   # noqa: E402  (DM_GAME picks the profile)
+# debug: True keeps the AST optimizer off. With it on (debug: False), 8/16-bit shared stores and some rare HCPS
+# variants throw InvalidCastException AstOperation -> AstOperand (seedds/nxnative issue 1415); those were the 5
+# untranslated Xeno X shaders, one of which draws the intro movie. The Apple chain already uses debug: True.
+
 from shader_stage import glslc_stage   # a code area's stage: the package reader's rule (headerless compute code included), in a module of its own
 
 ap = argparse.ArgumentParser()
@@ -129,7 +133,7 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
         code = code[:dmsh_ampere.inst_len(ctl)]
         cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
         j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {},
-             'c1': c1.hex(), 'debug': False, 'reduced': True, 'ssbo_align': SB_ALIGN, 'subgroup_size': SUBGROUP,
+             'c1': c1.hex(), 'debug': True, 'reduced': True, 'ssbo_align': SB_ALIGN, 'subgroup_size': SUBGROUP,
              'gather_bias': GATHER_BIAS, 'gs_passthrough': False, 'draw_parameters': True,
              'viewport_mask': False, 'render_scale': False, 'arch': 'sm86'}
         if stage == 'cs':
@@ -150,7 +154,7 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
     elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     xfb = xfb_layout(key, rec[ci:]) if stage in ('vs', 'gs') else None   # a geometry shader captures what it emits (Xenoblade Chronicles 3's particle update, 293ecebc0136519b)
-    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'ssbo_align': SB_ALIGN, 'subgroup_size': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, 'draw_parameters': True, 'viewport_mask': False, 'render_scale': False, **({'xfb': xfb} if xfb else {})}
+    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': True, 'reduced': True, 'ssbo_align': SB_ALIGN, 'subgroup_size': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, 'draw_parameters': True, 'viewport_mask': False, 'render_scale': False, **({'xfb': xfb} if xfb else {})}
     if stage == 'cs':   # Runtime captures have no facts-table row; their control section still declares the workgroup.
         x, y, z, shared = struct.unpack_from('<4I', rec, ci + 0x748)
         j.update(local=[x, y, z], shared=(shared + 15) // 16 * 16)

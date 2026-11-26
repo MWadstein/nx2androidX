@@ -169,12 +169,16 @@ ROOTFS_EXT = ['toolchain/clang/bin/clang', 'toolchain/clang/bin/ld.lld', 'toolch
               'tool/tools/nx_extract/nx_extract', 'tool/tools/dmsh_xlate/dmsh_xlate']
 
 
-def payload_rootfs(payload: Path, out: Path, assets: Path):
+def payload_rootfs(payload: Path, out: Path, assets: Path, debs: Path | None = None):
     """The rootfs out of the payload: the release gives a tarball with the rootfs inside.
 
     The rootfs is a whole Debian userland (a gigabyte unpacked) and the porter runs a small part of it: the
     software renderer, the video codecs, the X11 stack and the locales are never loaded. It is trimmed to the
-    closure of the programs that are started (rootfs_trim.py) before it goes into the app."""
+    closure of the programs that are started (rootfs_trim.py) before it goes into the app.
+
+    The supply channel's rootfs omits libraries the guest Python itself needs (zlib, expat, ffi, zstd, ...).
+    The same Debian packages are unpacked for the build tools; their libraries are appended to the trimmed
+    rootfs so the guest can load them too."""
     print(f'>> the rootfs out of {payload.name}')
     # the name matters: the build expands an asset called *.tar.gz, and the app wants the stream as it is
     target = out / 'rootfs.pkg'
@@ -186,6 +190,20 @@ def payload_rootfs(payload: Path, out: Path, assets: Path):
     for e in ROOTFS_EXT:
         cmd += ['--ext', e]
     subprocess.run(cmd, check=True)
+    if debs is not None:
+        libdir = debs / 'debs/usr/lib/aarch64-linux-gnu'
+        if libdir.is_dir():
+            import tarfile
+            with tarfile.open(trimmed) as tf:
+                have = {n.lstrip('./') for n in tf.getnames()}
+            with tarfile.open(trimmed, 'a') as tf:
+                for src in sorted(libdir.iterdir()):
+                    name = f'usr/lib/aarch64-linux-gnu/{src.name}'
+                    if name not in have:
+                        info = tf.gettarinfo(str(src), arcname=name)
+                        if info.isfile():
+                            info.mode = 0o755
+                        tf.addfile(info, src.open('rb') if info.isfile() else None)
     import gzip
     with trimmed.open('rb') as src, gzip.open(target, 'wb', compresslevel=6) as f:
         shutil.copyfileobj(src, f, 1 << 20)
@@ -409,6 +427,13 @@ def add_tree(out: tarfile.TarFile, source: Path, prefix: str) -> int:
         rel = path.relative_to(source).as_posix()
         member = out.gettarinfo(str(path), arcname=f'{prefix}/{rel}')
         if member.isreg():
+            # Windows has no execute bit: a tool that is executable on Linux is copied here with mode 0644.
+            # The guest runs these tools directly, so put the bit in the archive instead of the file system.
+            if not member.mode & 0o111 and (
+                    'bin' in rel.split('/') or 'tools' in rel.split('/') or 'dmsh_xlate_bin' in rel.split('/')) \
+                    and path.suffix not in ('.py', '.json', '.txt', '.dll', '.config'):
+                # ld.lld has a suffix, but the linker is invoked by name and must be executable too.
+                member.mode = 0o755
             with path.open('rb') as f:
                 out.addfile(member, f)
             size += member.size
@@ -567,7 +592,7 @@ def main():
     copy_tree(toolchain, out / 'toolchain')
 
     # the rootfs is trimmed against the tool tree and the build tools: they have to be there first
-    payload_rootfs(payload, out, out)
+    payload_rootfs(payload, out, out, cache)
 
     # The .NET runtime: the extractor and the shader translator are C# and run on it. They are built on the computer
     # and shipped with the app (the phone cannot build them), so the phone only needs a runtime. It travels in the
