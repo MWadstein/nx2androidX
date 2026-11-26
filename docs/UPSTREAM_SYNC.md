@@ -8,8 +8,15 @@ repositories it grew from. Both are now read-only remotes:
 - `upstream-nx2android` — [shirai91/nx2android](https://github.com/shirai91/nx2android),
   the product line this fork was forked from.
 
+[peanuts-native](https://github.com/igawa6/peanuts-native) is a third source of
+generic fixes. It is a sibling Android fork on Banana Native, not a descendant of
+ours. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for the full stack and for the exact
+source of every borrowed fix.
+
 Neither remote is ever pushed to. Work is committed to organized local branches; there
-are no pull requests while this fork is used by one person.
+are no pull requests while this fork is used by one person. Commit bodies name the
+source with `Upstream: owner/repo@sha`, `Follows: owner/repo#n` or `Co-authored-by:`
+as described in [TECH_LINEAGE.md](TECH_LINEAGE.md).
 
 ## What is shared and what is not
 

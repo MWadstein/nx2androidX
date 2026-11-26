@@ -63,6 +63,16 @@ MIT license they carried ("to use, copy, modify, merge, publish, distribute,
 sublicense, and/or sell copies"), with their copyright notices kept. The MIT
 text is reproduced in full at the end of this file.
 
+A third family member contributed later fixes: [peanuts-native](https://github.com/igawa6/peanuts-native)
+by igawa6 is a sibling Android fork built on Banana Native
+(<https://git.eden-emu.dev/moceure/BananaNative>) rather than on this repository.
+We ported its Ampere shader reader/translator path and followed its findings on
+other fixes; those sources and the exact commits are credited in
+[docs/TECH_LINEAGE.md](docs/TECH_LINEAGE.md) and in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The Ampere decoder path comes
+from switch2mac/`nx2_lower` (Eglantine) under GPL-3.0-or-later, so the combined
+shader translator is distributed under this repository's GPL-3.0-or-later terms.
+
 ### The original MIT license of the upstream code
 
 MIT License

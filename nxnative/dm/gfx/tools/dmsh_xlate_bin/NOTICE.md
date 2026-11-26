@@ -17,8 +17,16 @@ text of each component travels with it in [`LICENSES/`](LICENSES/).
 
 ## Licenses
 
-Every component above is MIT or Apache-2.0, and its license text is in
-[`LICENSES/`](LICENSES/):
+The individual .NET libraries are MIT or Apache-2.0 and their license texts
+are in [`LICENSES/`](LICENSES/). The committed `dmsh_xlate.dll`,
+`Ryujinx.Graphics.Shader.dll` and `Ryujinx.Common.dll` in this tree are the
+locked build from [peanuts-native](https://github.com/igawa6/peanuts-native),
+commit `b9a9e406aa44ab8d9e2a37f9b338df9dab11b86e` (igawa6). Peanuts builds on
+Banana Native (<https://git.eden-emu.dev/moceure/BananaNative>) and
+seedds/nxnative. Its Ampere decoder descends from switch2mac/`nx2_lower`
+(Eglantine), GPL-3.0-or-later, so the translator as a combined work is
+distributed under this repository's GPL-3.0-or-later terms. See
+[`docs/TECH_LINEAGE.md`](../../../../../docs/TECH_LINEAGE.md) for the full chain.
 
 | Component | License | License text |
 |---|---|---|
