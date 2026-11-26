@@ -63,6 +63,20 @@ def copy_tree(src: Path, dst: Path, skip=SKIP_DIRS):
             if not target.exists(): target.symlink_to(link)
 
 
+def translator_dlls(tool: Path):
+    """The phone runs a prebuilt dmsh_xlate from the payload, but its C# assemblies come from this tree.
+
+    The payload's copy predates the Ampere frontend: a build that ships it translates Xeno X's NVN2
+    shaders with a decoder that cannot read them. The launcher is a linux-arm64 binary built for the
+    phone, so only the managed assemblies are replaced; the in-repo bin holds the ones the tools use.
+    """
+    src = REPO / 'nxnative/dm/gfx/tools/dmsh_xlate_bin'
+    dst = tool / 'tools/dmsh_xlate'
+    if not src.is_dir() or not dst.is_dir(): return
+    for dll in sorted(src.glob('*.dll')):
+        shutil.copy2(dll, dst / dll.name)
+
+
 def in_profile_dir(rel: Path):
     """The path is inside a game profile folder (dm/games/<title ID>/): the profiles are not carried by the app.
 
@@ -502,6 +516,8 @@ def main():
         src = REPO / name
         if not src.exists(): continue
         copy_tree(src, tool / name, skip=TOOL_SKIP)
+    # the phone runs the payload's launcher, which predates the Ampere frontend: give it this tree's assemblies
+    translator_dlls(tool)
     # the phone's own tools (phone_tools/): they travel with the app, in the tool tree's tools folder, so the
     # assistant finds them at $NX2A_REPO/tools/<name>.py without looking for them
     if (REPO / 'phone_tools').is_dir():

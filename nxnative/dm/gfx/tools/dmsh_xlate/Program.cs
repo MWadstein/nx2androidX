@@ -6,16 +6,28 @@
 //   This used to rewrite for GL always: a near=0 game's depth was squeezed into 0.5..1, and effects that turn depth into distance (Link's Awakening's outdoor depth of field blurring the whole screen, occlusion) were all wrong.
 // Usage: dmsh_xlate <job.json> <output dir>
 //   Job: [{ "key", "stage": "vs|ps|cs", "code": machine code file (graphics = 0x50-byte SPH + instructions, compute = instructions),
+//           "arch": "sm86" for Ampere code (NVN2, Switch 2: a 0x80-byte SPH and 128-bit instructions; absent = Maxwell),
 //           "tex": { "slot": "2d|2darray|cube|cubearray|3d|buffer|1d|1darray|2dms|2dmsarray", ... }, "img": { "slot": { "type", "fmt" } },
-//           "attr": { "location": "float|sint|uint" }, "fout": { "target": "float|sint|uint" }, "local": [x, y, z] }]
-//   Output: <key>.spv and <key>.res.json (offsets of storage buffer slots in c0, etc.; decoding texture handle → slot number is done in the script that builds the metallib;
-//           "fetch1d": the texture slots read by 1D integer fetches translated as wrapped 2D reads, see RecordTexelFetch1D)
+//           "attr": { "location": "float|sint|uint" }, "fout": { "target": "float|sint|uint" }, "local": [x, y, z],
+//           Android Vulkan only (absent for Apple): "subgroup_size": n, "ssbo_align": bytes, "gs_passthrough": false, "shared_max": bytes,
+//           Switch 2 task / mesh programs (Android Vulkan): "stage": "ts|ms", "arch": "sm86", "code" the code area with its 0x80-byte SPH (as a graphics stage's) cut to
+//           the instruction length, "local": [threads, 1, 1] (control +0x58), "mesh": [max vertices, max primitives, payload bytes, per-vertex plane codes ...
+//           (132 the point size, 0-3 position x y z w, 4 + 4 g + c generic g component c: the SPH's output map in order), and optionally -1, per-primitive value codes ... (all the
+//           values the program writes, in order, -3 for one no output takes: their count is the stride of a 32-primitive chunk), and
+//           optionally -2, generic locations to declare as (0, 0, 0, 1) per-vertex outputs ...] (task: [0, 0, payload bytes]), "mesh_topology": vertices per primitive
+//           (mesh, optional: 1 points, 3 triangles, the default), "gl_depth_spec": SpecId (mesh, optional:
+//           the GL depth rewrite under a bool specialization constant). Translated as compute and emitted as a TaskEXT / MeshEXT entry point (Ryujinx
+//           StructuredIr/MeshShaderInfo.cs, CodeGen/Spirv/SpirvMeshEntry.cs) }]
+//   Output: <key>.spv and <key>.res.json (offsets of storage buffer slots in c0, etc.; a mesh program's "mesh": its output locations, per vertex and per primitive; decoding texture handle → slot number is done in the script that builds the metallib;
+//           "shared_spill": {"bytes", "workgroup"} when the shared memory moved to a storage buffer (job shared_max); "fetch1d": the texture slots read by 1D integer fetches translated as wrapped 2D reads, see RecordTexelFetch1D;
+//           a texture's or an image's "tbx": a buffer texture's or buffer image's index in the offset table, TranslationFlags.MetalBufferImageBias (Apple jobs))
 using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.Shader;
 using Ryujinx.Graphics.Shader.Translation;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -25,12 +37,15 @@ static class SwshXlate
     // NVN's handle tables in c[2], byte offsets, 8 bytes per slot (one layout in every game, see dm/gfx/tools/dmsh_build.py): combined textures 0x20 + 8 r, images 0x120 + 8 r (8 slots),
     // separate textures 0x168 + 8 r (slot 128 + r), separate samplers 0x568 + 8 r
     const int TexBase = 0x20, ImgBase = 0x120, ImgSlots = 8, SepTexBase = 0x168, SepTexSlot0 = 128, SampBase = 0x568;
+    // Handle words in c[2]: one every 8 bytes up to the end of the separate sampler table (128 slots), 301 in all. An array of c[2] handles the shader indexes at run time (Ryujinx's
+    // texture array from a buffer, BindlessToArray: the index is the handle's byte offset ÷ 8) has one element per word, so any word the shader computes is in it
+    const int C2HandleWords = (SampBase + 8 * 128) / 8;
 
     sealed class Accessor : IGpuAccessor
     {
         readonly byte[] _code; readonly JsonObject _job; int _binding = 1; public readonly List<string> Notes = new();
         readonly byte[] _c1;
-        public Accessor(byte[] code, JsonObject job, Dictionary<int, SamplerType> imageTypes = null) { if (job["geometry_topology"] != null) _binding = 40; _code = code; _job = job; _c1 = job["c1"] is JsonNode h ? Convert.FromHexString((string)h) : Array.Empty<byte>(); _imageTypes = imageTypes; }
+        public Accessor(byte[] code, JsonObject job, Dictionary<int, SamplerType> imageTypes = null, Dictionary<int, SamplerType> textureTypes = null) { if (job["geometry_topology"] != null) _binding = 40; _code = code; _job = job; _c1 = job["c1"] is JsonNode h ? Convert.FromHexString((string)h) : Array.Empty<byte>(); _imageTypes = imageTypes; _textureTypes = textureTypes; }
         // A texture query on an image handle (TXQ on c2 0x120 + 8 r: Unreal's GetDimensions on the RWTexture3D a compute shader writes) asks the type of that handle, which a table built
         // without the game's PC shaders does not answer, and the 2D default took a 3D image's depth from its width. The shader's own surface instructions give the image's type: the
         // first translation records that a query went unanswered (ImageQueryGuessed), and Main translates again with the types of the images it found, by c2 handle (ImageTypesOf)
@@ -41,17 +56,53 @@ static class SwshXlate
             foreach (var im in p.Info.Images) if (im.CbufSlot == 2 || im.CbufSlot < 0) types[im.HandleIndex] = im.Type & (SamplerType.Mask | SamplerType.Array);
             return types;
         }
+        // The same for a texture (Princess Peach: Showtime!'s size query on a volume it also samples, 1,463 of its shaders). A handle ORs a texture word and a sampler word, and the query's has
+        // another sampler word than the sample's, so Ryujinx's merge by handle (MergeTextureMeta) keeps them apart and the query gets its own binding, typed 2D, of a 3D texture: a binding Metal
+        // does not define. So the types go by texture slot, as the answer table does (Slot). A binding whose handle a query guessed counts only when it is not the guess: then an instruction typed
+        // it, through that merge. A slot two instructions give different types is left out. Only a slot a query guessed and another instruction types otherwise is returned, as nothing else would change
+        readonly Dictionary<int, SamplerType> _textureTypes; readonly HashSet<int> _guessedHandles = new();
+        public Dictionary<int, SamplerType> TextureTypesOf(ShaderProgram p)
+        {
+            var types = new Dictionary<int, SamplerType>(); var mixed = new HashSet<int>();
+            foreach (var t in p.Info.Textures)
+            {
+                if (t.ArrayLength != 1) continue;
+                SamplerType ty = t.Type & (SamplerType.Mask | SamplerType.Array | SamplerType.Multisample);
+                int slot = Slot(t.HandleIndex, t.CbufSlot, false);
+                if (slot < 0 || (ty == SamplerType.Texture2D && _guessedHandles.Contains(t.HandleIndex))) continue;
+                if (types.TryGetValue(slot, out SamplerType seen) && seen != ty) mixed.Add(slot); else types[slot] = ty;
+            }
+            var guessed = new HashSet<int>(_guessedHandles.Select(h => Slot(h, -1, false)));
+            return types.Where(kv => !mixed.Contains(kv.Key) && guessed.Contains(kv.Key) && kv.Value != SamplerType.Texture2D).ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
         // c1 constant segment (the 0x100 bytes before the control segment in the shader package): the jump table of indirect jump BRX lives here (LDC c[1]); without it the translator cannot resolve jump targets and control flow goes wrong (particle shaders loop forever)
+        public int QueryConstantBuffer1Size() => _c1.Length;
+        public int[] QueryAmpereComputeC0Layout() => _job["nvn2_cs"] is JsonArray l ? l.Select(v => (int)v).ToArray() : null;
+        // A task / mesh program's layout (job "mesh", see the file header) and its GL depth constant
+        public int[] QueryMeshShaderLayout() => _job["mesh"] is JsonArray m ? m.Select(v => (int)v).ToArray() : null;
+        public int QueryMeshShaderTopology() => _job["mesh_topology"] is JsonNode mt ? (int)mt : 3;
+        public int QueryMeshShaderGlDepthSpecId() => _job["gl_depth_spec"] is JsonNode n ? (int)n : -1;
+        public int QueryAmpereStageBank() => _job["stage_bank"] is JsonNode b ? (int)b : -1;   // an NVN2 graphics stage's own bank, its push block 1 + stage index (dmsh_build.py job_for)
+        public int[] QueryAmpereStageMemory() => _job["stage_memory"] is JsonArray l ? l.Select(v => (int)v).ToArray() : null;   // a task or mesh shader (dmsh_meshstage.py)
+        // Apple jobs (no "ssbo_align"): the Metal host binds storage buffers from bindless constant buffer handles and pushed addresses (NVN_RB_SBUFU / SBUFQ); Android's does not
+        public bool QueryHostStorageHandles() => _job["ssbo_align"] == null;
         public uint ConstantBuffer1Read(int offset) { if (offset >= 0 && offset + 4 <= _c1.Length) return BitConverter.ToUInt32(_c1, offset); Notes.Add($"c1 read out of bounds +{offset:X} (c1 length {_c1.Length})"); return 0; }
         // All resources go into set 0, each with a distinct binding number (spirv-cross emits them as one argument buffer); the translator's convention of giving the buffer of constant segment number index binding = index+1 is not relied on
+        // The translator's own messages (a bindless read it resolved, or could not and removed, its result 0; an invalid encoding) go into the notes, marked, which dmsh_build.py counts apart
+        public void Log(string message) => Notes.Add("translator: " + message);
         public SetBindingPair CreateConstantBufferBinding(int index) => new(0, _binding++);
         public SetBindingPair CreateImageBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
         public SetBindingPair CreateStorageBufferBinding(int index) => new(0, _binding++);
         public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
-        public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
-        public int QuerySamplerArrayLengthFromPool() => 32;
-        public int QueryTextureArrayLengthFromBuffer(int slot) => 32;
-        public int QueryTextureArrayLengthFromPool() => 32;
+        // An address past the code is no code: FindBrxTargetsAmpere ends a jump table on it when the words after the table are not code offsets (Yoshi and the Mysterious Book's 23e73eaf528c9c0b, whose slice threw)
+        public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => address >= (ulong)_code.Length ? default : MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
+        // A texture read whose handle the translator cannot trace to one slot indexes the texture and sampler pools by the handle's IDs (20 and 12 bits); dmsh_build.py turns these
+        // arrays into pointers to the pools the replay keeps (pool_arrays), with a run-time bound, so the lengths are the whole ID ranges
+        public int QuerySamplerArrayLengthFromPool() => 1 << 12;
+        // c[2]: every handle word (C2HandleWords). EA SPORTS FC 27's lights index separate texture i as element 45 + i (c2 byte 0x168 + 8 i), which 32 elements clamped to element 31.
+        // Other buffers (the game's own uniform buffers, read through the handles' byte offsets as well) keep 32
+        public int QueryTextureArrayLengthFromBuffer(int slot) => slot == 2 ? C2HandleWords : 32;
+        public int QueryTextureArrayLengthFromPool() => 1 << 20;
 
         string Get(string table, int slot) => _job[table] is JsonObject t && t[slot.ToString()] is JsonNode n ? (n is JsonObject o ? (string)o["type"] : (string)n) : null;
         // A handle's texture or image slot, numbered as dmsh_build.py decode_tex numbers the reflection's (so an answer table row names the slot the reflection shows): the handle ORs two
@@ -78,6 +129,11 @@ static class SwshXlate
             {
                 if (_imageTypes != null && _imageTypes.TryGetValue(handle, out SamplerType it)) { Notes.Add($"texture handle {handle:X} is image slot {islot}: type {it} from the shader's image instructions"); return it; }
                 ImageQueryGuessed = true;
+            }
+            if (t == null && slot >= 0 && islot < 0)
+            {
+                if (_textureTypes != null && _textureTypes.TryGetValue(slot, out SamplerType tt)) { Notes.Add($"texture handle {handle:X} is texture slot {slot}: type {tt} from the shader's other instructions"); return tt; }
+                _guessedHandles.Add(handle);
             }
             if (t == null) { Notes.Add($"texture handle {handle:X} (constant buffer {cbufSlot}, slot {slot}) has no type in the answer table, using 2D"); return SamplerType.Texture2D; }
             return t switch
@@ -107,51 +163,36 @@ static class SwshXlate
         public int QueryComputeSharedMemorySize() => _job["shared"] is JsonNode n ? (int)n : 0;   // the shared memory size in the compute shader's control section (shader_split.py)
         static AttributeType Attr(string s) => s switch { "sint" => AttributeType.Sint, "uint" => AttributeType.Uint, _ => AttributeType.Float };
         public bool QueryGeometryInputFixed() => _job["geometry_topology"] != null;
+        // Compute lowering must emit passthrough vertices explicitly: Metal
+        // cannot supply the native NV geometry-passthrough stage afterwards.
+        // Job gs_passthrough = false (the Android Vulkan build, vk_android_build.py): the device has no SPV_NV_geometry_shader_passthrough, so the shader writes its vertices itself
+        public bool QueryHostSupportsGeometryShaderPassthrough() => _job["geometry_topology"] == null && !(_job["gs_passthrough"] is JsonNode gp && !(bool)gp);
+        // Host answers only the Android Vulkan build sets (vk_android_build.py; android/SHADERS.md); a job without them gets Ryujinx's defaults, which the Apple libraries are built with.
+        // Job subgroup_size: the device's fixed subgroup size (Adreno: 64). Maxwell code assumes 32-lane warps; with 64 Ryujinx splits ballots, masks and shuffles into 32-lane halves (InstEmitWarp, HelperFunctionManager)
+        // Job shared_max: the device's maxComputeSharedMemorySize (DMSH_VK_SHARED_MAX). A compute program declaring more keeps its shared memory in a storage buffer, a slice per
+        // workgroup (Ryujinx StructuredIr/SharedSpillInfo.cs); unset, no limit (Apple: dmsh_build.py shared_spill moves threadgroup arrays in the Metal source instead)
+        public int QueryHostComputeSharedMemoryMax() => _job["shared_max"] is JsonNode sm ? (int)sm : 0;
+        public (int Slice, int Workgroup)? SharedSpill;   // the res.json's "shared_spill": {"bytes": a workgroup's slice, "workgroup": bytes left in workgroup memory}
+        public void RecordSharedSpill(int sliceBytes, int workgroupBytes) => SharedSpill = (sliceBytes, workgroupBytes);
+        public int QueryHostSubgroupSize() => _job["subgroup_size"] is JsonNode sg ? (int)sg : 32;
+        // Job "gather_bias" (the Android build, vk_android_build.py GATHER_BIAS: 8 in every Android library, whatever machine builds it): bits of the host's gather coordinate precision; the translator moves gather
+        // coordinates by 1 / (size x 2^(bits + 1)) off the texel edge, where Adreno rounds to the neighbouring footprint. 0 (the Apple jobs): none
+        public int QueryHostGatherBiasPrecision() => _job["gather_bias"] is JsonNode gb ? (int)gb : 0;
+        // Job ssbo_align: the device's storage buffer offset alignment. Set, the host binds each storage buffer at its address rounded down to it, and the shader adds the
+        // difference (GlobalToStorage: offset = address − (base & −align)); unset, a storage buffer starts exactly at its c0 address
+        public bool QueryHasUnalignedStorageBuffer() => _job["ssbo_align"] != null;
+        public bool QueryHasConstantBufferDrawParameters() => _job["ssbo_align"] != null;   // Android Vulkan: c0 + 0x644 reads BaseInstance, which holds an indirect draw's (Metal: dmsh_build.py vs_base_instance)
+        public int QueryHostStorageBufferOffsetAlignment() => _job["ssbo_align"] is JsonNode al ? (int)al : 16;
         public GpuGraphicsState QueryGraphicsState()
         {
             Array32<AttributeType> attr = default; Array8<AttributeType> fout = default;
             if (_job["attr"] is JsonObject a) foreach (var kv in a) attr[int.Parse(kv.Key)] = Attr((string)kv.Value);
             if (_job["fout"] is JsonObject f) foreach (var kv in f) fout[int.Parse(kv.Key)] = Attr((string)kv.Value);
-            // Job "early_z" (shader_vk.py job_for, from the control section): the fragment shader's layout(early_fragment_tests), as NVN sets FORCE_EARLY_FRAGMENT_TESTS for it
-            return new GpuGraphicsState(_job["early_z"] is JsonNode ez && (bool)ez, _job["geometry_topology"] is JsonNode gt ? (InputTopology)(int)gt : _job["gs_input"] is JsonNode gi ? (InputTopology)(int)gi : InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
+            bool earlyZ = _job["early_fragment_tests"] is JsonNode ez && (bool)ez;   // control +0x718 (dmsh_build.py job_for): [[early_fragment_tests]] in the MSL
+            return new GpuGraphicsState(earlyZ, _job["geometry_topology"] is JsonNode gt ? (InputTopology)(int)gt : InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
                 false, false, false, false /* depth not rewritten: dmsh_build.py adds the GL entry point (see the file header) */, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
                 false /* no Y flip */, true /* origin upper-left */, false);
         }
-        // Job "xfb" (the Android chain, shader_vk.py xfb_layout; Vulkan captures natively with VK_EXT_transform_feedback): per feedback buffer {"stride", "words"}, words = the output word
-        // written at each 4-byte position (0x20 + 4 x generic output + component, Maxwell's attribute word numbering). The translator then decorates those outputs XfbBuffer / XfbStride / Offset.
-        // Jobs without it (every Apple job, and every shader without feedback) answer as before: no feedback
-        // Job "sb_align" (the Android chain, shader_vk.py SB_ALIGN): the alignment the host binds storage buffers at. A global memory access becomes a storage buffer access at
-        // address − (buffer address & −alignment), so the replay must bind from exactly that boundary (Vulkan binds at a multiple of the device's minStorageBufferOffsetAlignment, 64 on
-        // Adreno; Metal at the address itself, the default 16 here). With 16 against Adreno's 64, Xenoblade Chronicles 3's movie shader read its NV12 frame shifted: vertical stripes.
-        // GlobalToStorage's inline accesses take that form only when the buffers are "unaligned"; otherwise they index from the buffer address itself, against a binding that starts
-        // below it. Xenoblade Chronicles 3's vertex shader 5f6491f9bda5ae4d writes halves at its buffer + 10 x vertex, the buffer 0xd0 past a 256-byte boundary: they landed 0xd0 bytes
-        // early, over the game's malloc chunks in the same pool, and the heap broke (a crash in dlmalloc after the opening movie). With an alignment given, every access takes the form
-        public int QueryHostStorageBufferOffsetAlignment() => _job["sb_align"] is JsonNode n ? (int)n : 16;
-        public bool QueryHasUnalignedStorageBuffer() => _job["sb_align"] != null;
-        // GPU-written indirect arguments are unavailable to the CPU driver segment (Z-A's buildings vanished on Adreno 840): use the draw's Vulkan base IDs.
-        public bool QueryHasConstantBufferDrawParameters() => _job["draw_parameters"] is JsonNode n && (bool)n;
-        // Job "subgroup" (the Android chain, shader_vk.py SUBGROUP): the host's subgroup size; above 32 the translator emulates Maxwell's 32-lane warps inside it. Metal's SIMD groups are 32
-        public int QueryHostSubgroupSize() => _job["subgroup"] is JsonNode n ? (int)n : 32;
-        // Job "gather_bias" (the Android chain, shader_vk.py GATHER_BIAS): bits of the host's gather coordinate precision; the translator then moves gather coordinates by
-        // 1 / (size x 2^(bits + 1)) texels, off the texel edge where hosts round differently from Maxwell. 0 (Metal): none
-        public int QueryHostGatherBiasPrecision() => _job["gather_bias"] is JsonNode n ? (int)n : 0;
-        // Job "gs_passthrough" = false (the Android chain): passthrough geometry shaders (Maxwell's fast GS) are written out as ordinary ones. VK_NV_geometry_shader_passthrough is NVIDIA's
-        // alone; with its capability declared, Adreno refused every pipeline of Xenoblade Chronicles 3's effect geometry shaders (VK_ERROR_UNKNOWN)
-        public bool QueryHostSupportsGeometryShaderPassthrough() => !(_job["gs_passthrough"] is JsonNode n && !(bool)n);
-        public int QueryGeometryPassthroughAttributeMask() => _job["gs_passthrough_mask"] is JsonNode n ? (int)n : 0xffff;
-        // Android renders viewport zero without VK_NV_viewport_array2; Apple jobs retain native mask metadata.
-        public bool QueryHostSupportsViewportMask() => !(_job["viewport_mask"] is JsonNode n && !(bool)n);
-        // Job "render_scale" = false (the Android chain, whose support buffer holds 1.0 in every render scale: gfx_vk_shader.c): no TexelFetchScale / TextureSizeUnscale helpers.
-        // Their branch at each texel fetch made the Adreno 830 compiler fail on Fire Emblem: Three Houses' particle compute shaders (TexturePass.cs)
-        public bool QueryHostSupportsRenderScale() => !(_job["render_scale"] is JsonNode n && !(bool)n);
-        JsonObject Xfb(int b) => _job["xfb"] is JsonArray a && b < a.Count ? a[b] as JsonObject : null;
-        public bool QueryTransformFeedbackEnabled() => _job["xfb"] != null;
-        public ReadOnlySpan<byte> QueryTransformFeedbackVaryingLocations(int bufferIndex)
-        {
-            if (Xfb(bufferIndex)?["words"] is not JsonArray w) return Array.Empty<byte>();
-            byte[] r = new byte[w.Count]; for (int i = 0; i < r.Length; i++) r[i] = (byte)(int)w[i]; return r;
-        }
-        public int QueryTransformFeedbackStride(int bufferIndex) => Xfb(bufferIndex)?["stride"] is JsonNode s ? (int)s : 0;
         public bool QueryHostSupportsTextureShadowLod() => true;
         public bool QueryHostSupportsDepthClipControl() => false;   // Metal has no -1..1 clip control; the depth convention is not left to the translator, the rewrite is added per entry point in the MSL (see the file header)
         // Job reduced = true: relaxed precision - the translator marks NoContraction only on operations that must be exact (the default marks all: keeps the bit-exact results of Maxwell's separate rounding, at the cost of many optimization-disabled spvFMul etc. in the MSL)
@@ -173,6 +214,21 @@ static class SwshXlate
         return false;
     }
 
+    // A mesh program's outputs as the translator declares them (MeshShaderInfo): the generic locations per vertex (Location g, vec4[max vertices]) and per primitive
+    // (Location g, PerPrimitiveEXT, vec4[max primitives])
+    static JsonObject MeshOutputs(int[] layout)
+    {
+        int prim = Array.IndexOf(layout, -1, 3), pad = Array.IndexOf(layout, -2, 3);
+        int planeEnd = prim >= 0 ? prim : pad >= 0 ? pad : layout.Length, primEnd = pad >= 0 ? pad : layout.Length;
+        var vertex = layout[3..planeEnd].Where(c => c >= 4 && c < 132).Select(c => (c - 4) >> 2).Concat(pad >= 0 ? layout[(pad + 1)..] : Array.Empty<int>()).Distinct().OrderBy(g => g);
+        var primitive = prim >= 0 ? layout[(prim + 1)..primEnd].Where(c => c >= 4).Select(c => (c - 4) >> 2).Distinct().OrderBy(g => g) : Enumerable.Empty<int>();
+        return new JsonObject
+        {
+            ["max_vertices"] = layout[0], ["max_primitives"] = layout[1],
+            ["vertex_locations"] = new JsonArray(vertex.Select(g => (JsonNode)g).ToArray()), ["primitive_locations"] = new JsonArray(primitive.Select(g => (JsonNode)g).ToArray()),
+        };
+    }
+
     static int Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--source-sha")   // first 16 digits of the sha256 of the embedded Program.cs + csproj (same convention as dmsh_chain.py)
@@ -192,30 +248,33 @@ static class SwshXlate
                 byte[] code = File.ReadAllBytes((string)job["code"]);
                 var acc = new Accessor(code, job);
                 // Job debug = false: turn off DebugMode (DebugMode skips the AST optimizer and the output is full of temporaries; semantics unchanged)
-                var flags = (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] == "cs" ? TranslationFlags.Compute : 0);
+                // The Metal bounds flags read tables only the Metal host fills (dmsh_abi.h): Apple jobs only (Android jobs carry "ssbo_align")
+                var flags = TranslationFlags.MetalImageAtomics | (job["ssbo_align"] == null ? TranslationFlags.MetalUniformBounds | TranslationFlags.MetalBufferImageBias | TranslationFlags.MetalStorageBounds : 0) | (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] switch { "cs" => TranslationFlags.Compute, "ts" => TranslationFlags.Compute | TranslationFlags.TaskShader, "ms" => TranslationFlags.Compute | TranslationFlags.MeshShader, _ => 0 }) | ((string)job["arch"] == "sm86" ? TranslationFlags.Ampere : 0);
                 var ctx = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                 bool geometry = job["geometry_topology"] != null;
                 ShaderProgram p = ctx.Translate(geometry);
-                Dictionary<int, SamplerType> imageTypes = null;
-                if (acc.ImageQueryGuessed && (imageTypes = Accessor.ImageTypesOf(p)).Count > 0)   // a query on an image handle went unanswered: again with the images' types (see Accessor)
+                Dictionary<int, SamplerType> imageTypes = null, textureTypes = null;
+                if (acc.ImageQueryGuessed && (imageTypes = Accessor.ImageTypesOf(p)).Count == 0) imageTypes = null;   // a query on an image handle went unanswered: again with the images' types (see Accessor)
+                if ((textureTypes = acc.TextureTypesOf(p)).Count == 0) textureTypes = null;   // and on a texture word: again with the types its other instructions gave it
+                if (imageTypes != null || textureTypes != null)
                 {
-                    acc = new Accessor(code, job, imageTypes);
+                    acc = new Accessor(code, job, imageTypes, textureTypes);
                     ctx = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                     p = ctx.Translate(geometry);
                 }
                 if (UsesFloat64(p.BinaryCode))   // Tears of the Kingdom 1.4.3: 30 shaders used double and failed in the Metal compiler
                 {
-                    job["softfloat64"] = true; acc = new Accessor(code, job, imageTypes);
+                    job["softfloat64"] = true; acc = new Accessor(code, job, imageTypes, textureTypes);
                     ctx = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                     p = ctx.Translate(geometry); acc.Notes.Add("FP64 lowered to FP32 (DoubleToFloat)");
                 }
                 if (geometry)
                 {
                     // A fresh context: translation mutates the decoded program.
-                    var reader = Translator.CreateContext(0, new Accessor(code, job, imageTypes), new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
+                    var reader = Translator.CreateContext(0, new Accessor(code, job, imageTypes, textureTypes), new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                     File.WriteAllBytes(Path.Combine(outDir, key + ".reader.spv"), reader.GenerateVertexPassthroughForCompute().BinaryCode);
                 }
-                File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), VertexCounterLowering.Apply(code, (string)job["stage"], p.BinaryCode, acc.Notes));
+                File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), VertexCounterLowering.Apply(code, (string)job["stage"], acc.QueryHostSubgroupSize(), p.BinaryCode, acc.Notes));
                 var res = new JsonObject
                 {
                     ["key"] = key, ["stage"] = (string)job["stage"], ["notes"] = new JsonArray(acc.Notes.ConvertAll(n => (JsonNode)n).ToArray()),
@@ -223,11 +282,18 @@ static class SwshXlate
                     ["geometry_stride"] = geometry ? ctx.GetResourceReservations().OutputSizePerInvocation : 0,
                     ["uses_frag_coord"] = p.Info.UsesFragCoord, ["frag_out_map"] = p.Info.FragmentOutputMap,
                 };
-                foreach (var b in p.Info.CBuffers) res["cbufs"].AsArray().Add(new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot });
-                foreach (var b in p.Info.SBuffers) res["sbufs"].AsArray().Add(new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = b.SbCbSlot, ["cb_offset"] = b.SbCbOffset, ["flags"] = (int)b.Flags });
+                if ((string)job["stage"] == "ms") res["mesh"] = MeshOutputs(job["mesh"].AsArray().Select(v => (int)v).ToArray());
+                foreach (var b in p.Info.CBuffers) res["cbufs"].AsArray().Add((JsonNode)new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["fixed"] = b.FixedSize });   // fixed: a game uniform slot's bytes read at fixed offsets (TranslationFlags.MetalUniformBounds), which the host makes readable
+                foreach (var b in p.Info.SBuffers) res["sbufs"].AsArray().Add((JsonNode)new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = b.SbCbSlot, ["cb_offset"] = b.SbCbOffset, ["flags"] = (int)b.Flags });   // flags: 1 written, 2 bounded by the length table (TranslationFlags.MetalStorageBounds; dmsh_reflect.py gives the binding its "sbx")
                 foreach (var (list, name) in new[] { (p.Info.Textures, "textures"), (p.Info.Images, "images") })
-                    foreach (var t in list) res[name].AsArray().Add(new JsonObject { ["binding"] = t.Binding, ["type"] = (int)t.Type, ["format"] = t.Format.ToString(), ["cbuf_slot"] = t.CbufSlot, ["handle"] = t.HandleIndex, ["array"] = t.ArrayLength, ["separate"] = t.Separate, ["flags"] = (int)t.Flags });
-                if (acc.Fetch1D.Count > 0) { var f1 = new JsonArray(); foreach (int h in acc.Fetch1D) f1.Add(h); res["fetch1d"] = f1; }
+                    foreach (var t in list)
+                    {
+                        var o = new JsonObject { ["binding"] = t.Binding, ["type"] = (int)t.Type, ["format"] = t.Format.ToString(), ["cbuf_slot"] = t.CbufSlot, ["handle"] = t.HandleIndex, ["array"] = t.ArrayLength, ["separate"] = t.Separate, ["flags"] = (int)t.Flags };
+                        if (t.BufferBias >= 0) o["tbx"] = t.BufferBias;   // a buffer image's or buffer texture's index in the offset table (TranslationFlags.MetalBufferImageBias; dmsh_reflect.py gives it to the binding, nvn_mtl.m tbuf_lead)
+                        res[name].AsArray().Add((JsonNode)o);
+                    }
+                if (acc.SharedSpill is (int slice, int wg)) res["shared_spill"] = new JsonObject { ["bytes"] = slice, ["workgroup"] = wg };
+                if (acc.Fetch1D.Count > 0) { var f1 = new JsonArray(); foreach (int h in acc.Fetch1D) f1.Add((JsonNode)JsonValue.Create(h)); res["fetch1d"] = f1; }
                 File.WriteAllText(Path.Combine(outDir, key + ".res.json"), res.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                 ok++;
             }
@@ -242,27 +308,33 @@ static class SwshXlate
 // highest active lane adds popcount(ballot) to s1[0]. SPIRV-Cross cannot give a Metal vertex function the subgroup builtins ("Subgroup builtins are not available in
 // this type of function"), so the shader never built and its draws were skipped. Lowered to singleton groups: lane id 0 and ballot(true) = (1, 0, 0, 0), so every passing
 // invocation adds one; the atomic's result is unused, so the final sum (mod 2^32) is the same. Not a general subgroup fallback: it runs only on these analysed bytes.
-// The Android chain also needs it: the translator assumes 32-lane groups (ballot .x only) and Adreno runs 64-lane waves. Its optimized SPIR-V (no DebugMode) has the
-// ballot once per use (2) and the lane id loaded where used; every ballot(true) and lane id load is replaced the same way
 // Adapted from MacNativeGames (games/totk/tools/totk_xlate/VertexCounterLowering.cs, https://github.com/ly05010419/MacNativeGames), MIT License: dm/third_party/macnativegames/LICENSE.
 static class VertexCounterLowering
 {
     const string InstanceCodeHash = "F5F4D23149565ACD852F6B7091F64CC8CB3AA019CCB33BA3F88CED62C6D1FF7B";
 
-    internal static byte[] Apply(byte[] code, string stage, byte[] spirv, List<string> notes)
+    internal static byte[] Apply(byte[] code, string stage, int subgroupSize, byte[] spirv, List<string> notes)
     {
         if (stage != "vs" || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(code)) != InstanceCodeHash) return spirv;
         uint[] w = new uint[spirv.Length / 4]; Buffer.BlockCopy(spirv, 0, w, 0, spirv.Length);
         uint lane = 0, uintType = 0, vectorType = 0, trueId = 0; int ballots = 0, loads = 0;
+        // With 64 lanes the translator emits both ballot words and uses a lane read to
+        // select one. Lane zero selects the low word, whose singleton mask is 1.
+        int expected = subgroupSize == 64 ? 2 : 1;
         for (int i = 5; i < w.Length; i += (int)(w[i] >> 16))
         {
             uint op = w[i] & 65535;
             if (op == 71 && w[i + 2] == 11 && w[i + 3] == 41) lane = w[i + 1];   // OpDecorate BuiltIn SubgroupLocalInvocationId
             if (op == 21 && w[i + 2] == 32 && w[i + 3] == 0) uintType = w[i + 1];   // OpTypeInt 32 unsigned
             if (op == 41) trueId = w[i + 2];   // OpConstantTrue
-            if (op == 339) { vectorType = w[i + 1]; ballots++; if (w[i + 4] != trueId) throw new InvalidOperationException("visibility counter: ballot predicate changed"); }   // OpGroupNonUniformBallot
+            if (op == 339)   // OpGroupNonUniformBallot
+            {
+                if (w[i + 4] != trueId) throw new InvalidOperationException("visibility counter: ballot predicate changed");
+                if (ballots++ != 0 && vectorType != w[i + 1]) throw new InvalidOperationException("visibility counter: ballot type changed");
+                vectorType = w[i + 1];
+            }
         }
-        if (lane == 0 || uintType == 0 || vectorType == 0 || ballots == 0) throw new InvalidOperationException($"visibility counter: SPIR-V shape changed (lane id {lane}, uint {uintType}, uvec4 {vectorType}, {ballots} ballots)");
+        if (lane == 0 || uintType == 0 || vectorType == 0 || ballots != expected) throw new InvalidOperationException("visibility counter: SPIR-V shape changed");
         uint zero = w[3]++, one = w[3]++, mask = w[3]++;   // new ids past the bound
         var result = new List<uint>(w.Length + 16); result.AddRange(w.AsSpan(0, 5).ToArray());
         bool constants = false;
@@ -278,7 +350,7 @@ static class VertexCounterLowering
             else if (op == 339) result.AddRange(new uint[] { (4u << 16) | 83, w[i + 1], w[i + 2], mask });   // ballot(true) -> OpCopyObject (1, 0, 0, 0)
             else result.AddRange(w.AsSpan(i, (int)(w[i] >> 16)).ToArray());
         }
-        if (loads == 0 || !constants) throw new InvalidOperationException("visibility counter: lane id use changed");
+        if (loads != expected || !constants) throw new InvalidOperationException("visibility counter: lane id use changed");
         notes.Add("visibility counter lowered to singleton groups (one atomic add per passing vertex)");
         byte[] output = new byte[result.Count * 4]; Buffer.BlockCopy(result.ToArray(), 0, output, 0, output.Length);
         return output;

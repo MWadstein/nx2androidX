@@ -14,7 +14,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent.parent / 'gfx/tools'
 sys.path[:0] = [str(TOOLS), str(HERE)]
-import dmsh_facts, dmsh_chain, dmsv, shader_products, spv_half, spv_precise, spv_texture_offsets, spv_post   # noqa: E402  (DM_GAME picks the profile)
+import dmsh_facts, dmsh_chain, dmsv, dmsh_ampere, shader_products, spv_half, spv_precise, spv_texture_offsets, spv_post   # noqa: E402  (DM_GAME picks the profile)
 from shader_stage import glslc_stage   # a code area's stage: the package reader's rule (headerless compute code included), in a module of its own
 
 ap = argparse.ArgumentParser()
@@ -118,8 +118,30 @@ def xfb_layout(key, ctl):
 def gs_variant_key(key, t):   # the bundle key of a geometry shader translated for input primitive t (0 points, 1 lines, 2 lines with adjacency, 4 triangles with adjacency)
     return key ^ ((t + 1) * 0x9E3779B97F4A7C15 & 0xFFFFFFFFFFFFFFFF)
 
+NVN2_STAGE_INDEX = {'vs': 0, 'hs': 1, 'ms': 1, 'ds': 2, 'gs': 3, 'ps': 4}   # NVN2 graphics stage banks (c[25 + index])
+
 def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback is captured natively (xfb_layout), from the vertex or the geometry stage
     ci = rec.find(bytes.fromhex('34127698')); code = rec[0x38:ci]
+    if dmsh_ampere.is_nvn2(rec[ci:]):
+        # Switch 2: Ampere code with an 0x80-byte SPH (no code header) and a short control section. The translator's sm86 frontend reads it natively.
+        ctl = rec[ci:]
+        c1 = dmsh_ampere.c1_segment(ctl, code)
+        code = code[:dmsh_ampere.inst_len(ctl)]
+        cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
+        j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {},
+             'c1': c1.hex(), 'debug': False, 'reduced': True, 'ssbo_align': SB_ALIGN, 'subgroup_size': SUBGROUP,
+             'gather_bias': GATHER_BIAS, 'gs_passthrough': False, 'draw_parameters': True,
+             'viewport_mask': False, 'render_scale': False, 'arch': 'sm86'}
+        if stage == 'cs':
+            j['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0],
+                            rec[ci + 0xa9] * 4, rec[ci + 0xb4], rec[ci + 0xb5], rec[ci + 0xaa] * 4]
+            x, y, z, shared = struct.unpack_from('<4I', rec, ci + 0x58)
+            j.update(local=[x, y, z], shared=(shared + 15) // 16 * 16)
+        if stage in NVN2_STAGE_INDEX: j['stage_bank'] = 25 + NVN2_STAGE_INDEX[stage]
+        if stage == 'ps' and dmsh_ampere.early_fragment_tests(ctl): j['early_fragment_tests'] = True
+        if key in FACTS: j.update(FACTS[key])
+        else: j['no_facts'] = True
+        return j, c1
     c1o, c1t = struct.unpack_from('<2I', rec, ci + 0x700)
     c1 = rec[0x38 + c1o:0x38 + c1t]
     ab = vertex_ab(key, code, rec[ci:]) if stage == 'vs' else None
@@ -128,14 +150,14 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
     elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     xfb = xfb_layout(key, rec[ci:]) if stage in ('vs', 'gs') else None   # a geometry shader captures what it emits (Xenoblade Chronicles 3's particle update, 293ecebc0136519b)
-    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, 'draw_parameters': True, 'viewport_mask': False, 'render_scale': False, **({'xfb': xfb} if xfb else {})}
+    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'ssbo_align': SB_ALIGN, 'subgroup_size': SUBGROUP, 'gather_bias': GATHER_BIAS, 'gs_passthrough': False, 'draw_parameters': True, 'viewport_mask': False, 'render_scale': False, **({'xfb': xfb} if xfb else {})}
     if stage == 'cs':   # Runtime captures have no facts-table row; their control section still declares the workgroup.
         x, y, z, shared = struct.unpack_from('<4I', rec, ci + 0x748)
         j.update(local=[x, y, z], shared=(shared + 15) // 16 * 16)
     # GLSLC marks a fragment shader declared layout(early_fragment_tests) at control +0x718 (bit 0); NVN then sets the 3D engine's FORCE_EARLY_FRAGMENT_TESTS, which
     # the code area does not carry. Monster Hunter Rise's occlusion culling draws boxes over a 128x64 depth and stores a flag per visible box: tested after the shader,
     # every box's fragments ran and flagged it (15 ms a frame in Kamura village on Adreno 650)
-    if stage == 'ps' and len(rec) >= ci + 0x71c and struct.unpack_from('<I', rec, ci + 0x718)[0] & 1: j['early_z'] = True
+    if stage == 'ps' and len(rec) >= ci + 0x71c and struct.unpack_from('<I', rec, ci + 0x718)[0] & 1: j['early_fragment_tests'] = True
     if key in FACTS: j.update(FACTS[key])
     else: j['no_facts'] = True
     return j, c1

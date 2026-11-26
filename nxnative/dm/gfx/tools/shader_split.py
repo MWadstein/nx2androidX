@@ -59,6 +59,21 @@ CTL_MAGIC = bytes.fromhex('34127698')
 STAGES = ['vs', 'hs', 'ds', 'gs', 'ps', 'cs']
 STAGE_NAME = {'vs': 'vertex', 'hs': 'hull', 'ds': 'domain', 'gs': 'geometry', 'ps': 'pixel', 'cs': 'compute'}   # shader_map.tsv column 3
 
+NVN2_KEY_CTL = 0x48
+NVN2_CTL_STAGE = {5: 'cs', 6: 'ts', 7: 'ms', 8: 'rt'}   # NVN2 control +0x56
+def nvn2_ctl(ctl):
+    """An NVN2 (Switch 2) control section: version 0xc9 at +4, the code area's length at +0x44 (dmsh_ampere.py). The key takes the first 0x48 bytes with +0x30 as zero (the host's keys_hash)"""
+    return len(ctl) >= NVN2_KEY_CTL and ctl[:4] == CTL_MAGIC and ctl[4:8] == b'\xc9\0\0\0'
+
+def nvn2_stage(ctl, code):
+    """Compute, task, mesh and RT use the control's stage byte (+0x56: 5..8); graphics uses the SPH at the code area's start"""
+    if len(ctl) > 0x56 and ctl[0x56] in NVN2_CTL_STAGE: return NVN2_CTL_STAGE[ctl[0x56]]
+    return sph_stage(bytes(0x30) + code[:4]) if len(code) >= 4 else None
+
+def nvn2_key(ctl):
+    c = ctl[:NVN2_KEY_CTL]
+    return c[:0x30] + bytes(4) + c[0x34:]
+
 def red(msg): sys.exit('[RED] ' + msg)
 
 # ---- the shaders' payloads on disk, not in memory ----
@@ -195,29 +210,31 @@ def zstd_mod():
     return zstd
 
 def ctl_len(ctl):
-    """Number of control bytes in the key: control +0x20 holds the section's own length. Every control section of Mario, Fire Emblem Engage, Metroid Dread and 13 Sentinels is at least 0x880 bytes, so the first 0x880 are used;
-    SDK 10's Super Mario 3D World + Bowser's Fury has 2,888 that are only 0x850 bytes (the bfsha in ShaderData, 6 layouts), with other data right after them, so only their own length is used (the same as the host's keys_hash)"""
+    """Number of control bytes in the key: an NVN2 section takes its first 0x48 bytes; for Maxwell, control +0x20 holds the section's own length when shorter than 0x880"""
+    if nvn2_ctl(ctl): return NVN2_KEY_CTL
     n = struct.unpack_from('<I', ctl, 0x20)[0]
     return n if 0x760 <= n < 0x880 else 0x880
 
 def skey(ctl, code):
     if isinstance(ctl, Payload): return ctl.key   # a spilled control section: its key was computed before it went to the spill file
-    return hashlib.sha256(ctl[:ctl_len(ctl)] + code).hexdigest()[:16]
+    return hashlib.sha256((nvn2_key(ctl) if nvn2_ctl(ctl) else ctl[:ctl_len(ctl)]) + code).hexdigest()[:16]
 
 def same_shader(a, b):
-    """Two copies of one key hold the same shader: the code areas are equal, and so are the control sections up to their own length (control +0x20). Pokémon Legends: Z-A's UI layout archives
-    (__ArchiveShader.bnsh inside the .truiv packs) give 104 KB control sections whose stage descriptor length runs 456 bytes past their own length, and those trailing bytes differ between copies"""
+    """Two copies of one key hold the same shader: the code areas are equal, and so are the control sections up to their own length (control +0x20; +0x30 masked for NVN2)"""
     (ca, ka), (cb, kb) = a, b
     ca, ka, cb, kb = payload_get(ca), payload_get(ka), payload_get(cb), payload_get(kb)
+    if nvn2_ctl(ca) or nvn2_ctl(cb): return ka == kb and nvn2_key(ca) == nvn2_key(cb)
     n = struct.unpack_from('<I', ca, 0x20)[0] if len(ca) >= 0x24 else len(ca)
     n = n if 0x760 <= n <= min(len(ca), len(cb)) else max(len(ca), len(cb))
     return ka == kb and ca[:n] == cb[:n]
 
 def check(where, st, ctl, code):
     """control section and code area consistent; returns the reason if not"""
-    # an inflated bundle resource may hold a section of just the magic: ctl_len reads the length field at +0x20, so it needs 0x24 bytes
+    # a section reduced to the magic by an inflated bundle must still have its own length field
     if len(ctl) < 0x24 or ctl[:4] != CTL_MAGIC or len(ctl) < ctl_len(ctl): return 'bad control section'
-    # a compute code area may have no header (SDK 10's Super Mario 3D World + Bowser's Fury and D2R: instructions start at +0; dmsh_build strips only a 0x12345679 header)
+    if nvn2_ctl(ctl):
+        # NVN2: Ampere code, an SPH without a code header; the control names the code length at +0x44
+        return None if struct.unpack_from('<I', ctl, 0x44)[0] == len(code) else 'control +0x44 does not match the code area length'
     if st == 'cs' and code[:4] in (CS_MAGIC, GFX_MAGIC) and code[:4] != CS_MAGIC or st != 'cs' and code[:4] != GFX_MAGIC: return 'code area header magic does not match the stage'
     if struct.unpack_from('<I', ctl, 0x704)[0] != len(code): return 'control +0x704 does not match the code area length'
     return None
@@ -296,7 +313,7 @@ def glslc_program(d, h, size, label):
     if len(secs) < 2 or len(set(sts)) < len(sts) or any(not st or check(label, st, ctl, code) for st, (ctl, code) in zip(sts, secs)): return []
     return [(f'{label}#GLSLC@{h:#x}#var', st, ctl, code) for st, (ctl, code) in zip(sts, secs)]
 
-def glslc_shaders(d, label, need=True):
+def glslc_shaders(d, label, need=True, skip=()):
     """GLSLC compiler outputs (838 in 13 Sentinels' main read-only segment, one stage each): from the magic 0x19866891, +0x44 = the whole output's length; an output of one stage holds exactly one control section with the code area right after it (control +0x20 = control length),
     one of several stages is read by its section headers (glslc_program).
     The magic is only 4 bytes, so only outputs that pass the triple check are kept. Every game's main is searched: Unity's player has 11 of its own (Fire Emblem Engage, Ace Attorney Investigations
@@ -308,6 +325,7 @@ def glslc_shaders(d, label, need=True):
     out = []
     for m in re.finditer(b'\x91\x68\x86\x19', d):
         h = m.start()
+        if any(a <= h < b for a, b in skip): continue   # a zstd literal is not a decoded GLSLC output
         # a resource block of a bundle (bnd2_shaders) is untrusted: the magic's 4 bytes may be all it holds
         if h + 0x48 > len(d): continue
         size = struct.unpack_from('<I', d, h + 0x44)[0]
@@ -1221,146 +1239,205 @@ def trpfs_decoded(label, size):
     return out
 _TRPFS_DEC = {}
 
-MONO_ARD, ARH1, XBC1, HCPS = 'Monolith ard', b'arh1', b'xbc1', b'HCPS'
-def arh_entries(path):
-    """Monolith Soft's file archive, an index (.arh) beside the data (.ard) (Xenoblade Chronicles 3: bf3.arh / bf3.ard, 76,445 files in 9.7 GB; each DLC a bf3_dlcNN pair of its own), the format of
-    Xenoblade 2's (XbTool's FileArchive): 'arh1', then u32 words: +8 node count, +0xc / +0x10 string table offset / length, +0x14 / +0x18 node table offset / length, +0x1c file table offset,
-    +0x20 file count, +0x24 key ^ 0xf3f35353. The string and node tables are XORed word by word with the key. The paths are a trie in the node table ({i32 next, i32 prev}; a node with next < 0
-    ends a path: -next is its suffix in the string table, followed by the file index), read back from each end node. The file table: 0x18-byte entries {u64 offset in the .ard, u32 stored length,
-    u32 length, u32 type (0 stored, 2 an xbc1 container: 0x30-byte header, then the stream), u32 index}. → [(path, offset, stored length, length, type)], or None when path is no index"""
-    a = read_whole(path)
-    if a[:4] != ARH1: return None
-    w = list(struct.unpack_from(f'<{len(a) // 4}I', a)); key = w[9] ^ 0xF3F35353
-    for o, n in ((w[3], w[4]), (w[5], w[6])):
-        for i in range(o // 4, (o + n) // 4): w[i] ^= key
-    d = struct.pack(f'<{len(w)}I', *w)
-    nn, so, sl, no, _, fo, fc = w[2:9]; strt = d[so:so + sl]
-    nodes = list(struct.iter_unpack('<ii', d[no:no + 8 * nn])); names = {}
-    for i, (nx, pv) in enumerate(nodes):
-        if nx >= 0 or pv < 0: continue
-        e = strt.index(b'\0', -nx); ch, cur = [], i
-        while nodes[cur][0]: prev = nodes[cur][1]; ch.append(chr(cur ^ nodes[prev][0])); cur = prev
-        names[struct.unpack_from('<i', strt, e + 1)[0]] = ''.join(reversed(ch)) + strt[-nx:e].decode('utf-8', 'replace')
-    return [(names.get(i, f'#{i}'), off, csz, usz, t) for i, (off, csz, usz, t, _) in enumerate(struct.iter_unpack('<qIIII', d[fo:fo + 0x18 * fc]))]
+ARH, XBC1, HCPS = b'ARH', b'xbc1', b'HCPS'
 
-def ard_jobs(files, parts=64):
-    """Every file of every Monolith archive (an .ard with its .arh beside it), in ranges of about equal stored length. → ([(ard path, rel, (MONO_ARD, entries)), …], the .ard / .arh paths)"""
-    ar = [(p, r, arh_entries(p[:-1] + 'h')) for p, r in files if p.endswith('.ard') and os.path.exists(p[:-1] + 'h')]
-    ar = [x for x in ar if x[2] is not None]
-    jobs, step = [], sum(e[2] for _, _, es in ar for e in es) / parts
-    for p, r, es in ar:
-        cur, size = [], 0
-        for e in sorted(es, key=lambda e: e[1]):
-            cur.append(e); size += e[2]
-            if size >= step: jobs.append((p, r, (MONO_ARD, tuple(cur)))); cur, size = [], 0
-        if cur: jobs.append((p, r, (MONO_ARD, tuple(cur))))
-    return jobs, {x for p, _, _ in ar for x in (p, p[:-1] + 'h')}
 
-def xbc1(d, at=0):
-    """An xbc1 container: 'xbc1', u32 compression (0 stored, 1 zlib, 3 zstd), u32 length, u32 stored length, u32 hash, 28-byte name, the stream from +0x30"""
-    import zlib
-    t, usz, csz = struct.unpack_from('<III', d, at + 4); raw = d[at + 0x30:at + 0x30 + csz]
-    out = zstd_mod().decompress(raw) if t == 3 else zlib.decompress(raw) if t == 1 else raw if t == 0 else None
-    if out is None or len(out) != usz: raise ValueError(f'xbc1 compression {t}, {len(out or b"")} of {usz} bytes')
+def arh_entries(d):
+    """Monolith ARH1/ARH2 index → (path, ARD offset, stored size). The ARH1 XOR trie
+    reconstructs full paths; the metadata table supplies the actual file bounds.
+    Format: https://github.com/roccodev/ard-tools/blob/master/docs/arh1.md
+    Xenoblade 3 2.2.1: 76,445 entries in bf3.arh, 9.05 GB in bf3.ard."""
+    if d[:4] == b'arh2':
+        # ARH2 (Xenoblade X DE) replaces paths with hashes. Entries are
+        # (u64 hash, u32 disk size, u32 expanded size); offsets accumulate
+        # aligned disk sizes, which already include any XBC1 wrapper.
+        # Layout: Nenkai/XbxDeTool, ArchiveHeaderFile.cs; checked against sts.arh.
+        if len(d) < 16: red('ARH2: truncated header')
+        count, align = struct.unpack_from('<2I', d, 4)
+        if not align or align & (align - 1): red('ARH2: invalid file alignment')
+        if count > (len(d) - 16) // 16: red('ARH2: index table out of bounds')
+        out, off = [], 0
+        for i in range(count):
+            key, size, _ = struct.unpack_from('<Q2I', d, 16 + i * 16)
+            if size: out.append((f'/#{key:016x}', off, size))
+            off += (size + align - 1) & -align
+        return out
+    if len(d) < 48 or d[:4] != b'arh1': return []
+    _, count, so, sn, no, nn, fo, fn, key = struct.unpack_from('<9I', d, 4)
+    if nn != count * 8 or any(o > len(d) or n > len(d) - o for o, n in ((so, sn), (no, nn), (fo, fn * 24))): red('ARH1: index table out of bounds')
+    key = (key ^ 0xf3f35353).to_bytes(4, 'little')
+    # The format encrypts whole u32 words; a final partial word stays plain.
+    dec = lambda o, n: bytes(v ^ key[i & 3] for i, v in enumerate(d[o:o + (n & ~3)])) + d[o + (n & ~3):o + n]
+    strings = dec(so, sn); nodes = list(struct.iter_unpack('<ii', dec(no, nn)))
+    names = {}
+    for i, (nxt, prev) in enumerate(nodes):
+        if nxt >= 0 or prev < 0: continue
+        off = -nxt
+        if off >= len(strings) or (end := strings.find(b'\0', off)) < 0 or end + 5 > len(strings) or not strings[off:end].isascii(): red('ARH1: invalid path suffix')
+        fid = struct.unpack_from('<I', strings, end + 1)[0]; prefix = []; cur = i; seen = set()
+        while cur:
+            if cur in seen or not 0 <= cur < len(nodes): red('ARH1: invalid path trie')
+            seen.add(cur); parent = nodes[cur][1]
+            if not 0 <= parent < len(nodes): red('ARH1: invalid path parent')
+            ch = cur ^ nodes[parent][0]
+            if not 0 <= ch < 128: red('ARH1: invalid path character')
+            prefix.append(ch); cur = parent
+        names[fid] = (bytes(reversed(prefix)) + strings[off:end]).decode('ascii')
+    out = []
+    for i in range(fn):
+        off, size, raw, flags, fid = struct.unpack_from('<Q4I', d, fo + i * 24)
+        # HasXbc1Header (bit 1): stored size excludes the 48-byte wrapper.
+        if size: out.append((names.get(fid, f'#{fid}'), off, size + (48 if flags & 2 else 0)))
     return out
 
-CMPZ = b'cmp\0zlib'
-def cmp_zlib(d, off):
-    """A Firehawk effect resource's zlib stream: 'cmp\0zlib', u32 stored length, u32 length, the stream (as upstream nxnative's monolith_cmp_data). → its bytes, or None for bytes that only look like one"""
-    import zlib
-    if off + 16 > len(d): return None
+
+def arh_jobs(files, parts=64):
+    jobs, used = [], set()
+    for path, rel in files:
+        if not path.endswith('.arh'): continue
+        with open(path, 'rb') as f: d = f.read()
+        if d[:4] not in (b'arh1', b'arh2'): continue
+        ard = path[:-4] + '.ard'
+        if not os.path.isfile(ard): red(f'{rel}: ARH index has no ARD data file')
+        entries = arh_entries(d); length = os.path.getsize(ard)
+        if any(o > length or n > length - o for _, o, n in entries): red(f'{rel}: ARD entry out of bounds')
+        step = max(1, (len(entries) + parts - 1) // parts)
+        jobs += [(ard, rel[:-4] + '.ard', (b'ARH', entries[i:i + step])) for i in range(0, len(entries), step)]
+        used.update((path, ard))
+    return jobs, used
+
+
+def xbc_data(d, off):
+    """An XBC1 stream: 48-byte header, stored / zlib / zstd payload. Return
+    (decoded bytes, end), or None for bytes that merely resemble a header."""
+    if off + 48 > len(d) or d[off:off + 4] != b'xbc1': return None
+    kind, raw, size = struct.unpack_from('<3I', d, off + 4)
+    if kind not in (0, 1, 3) or not size or off + 48 + size > len(d): return None
+    data = d[off + 48:off + 48 + size]
+    if kind == 1: data = zlib.decompress(data)
+    elif kind == 3: data = zstd_mod().decompress(data)
+    if len(data) != raw: red(f'XBC1 @{off:#x}: expected {raw} bytes, decoded {len(data)}')
+    return data, off + 48 + size
+
+
+def monolith_cmp_data(d, off):
+    """Firehawk effect archives: cmp\\0zlib, stored/raw sizes, zlib payload.
+    These independently compressed shader resources sit inside XBC1 entries."""
+    if off + 16 > len(d) or d[off:off + 8] != b'cmp\0zlib': return None
     size, raw = struct.unpack_from('<2I', d, off + 8)
     if not size or size > len(d) - off - 16: return None
     z = zlib.decompressobj()
     try: data = z.decompress(d[off + 16:off + 16 + size]) + z.flush()
-    except zlib.error: return None
-    if not z.eof or len(data) != raw: red(f'cmp zlib @{off:#x}: {len(data)} bytes, not the {raw} its header gives')
-    return data
+    except zlib.error as e: red(f'cmp zlib @{off:#x}: damaged payload ({e})')
+    if not z.eof or z.unused_data or len(data) != raw: red(f'cmp zlib @{off:#x}: payload does not match stored/raw sizes')
+    return data, off + 16 + size
 
-def spch_shaders(d, b, label):
-    """A Monolith shader archive ('HCPS', version 1010 in Xenoblade Chronicles 3; xc3_lib's Spch): u32 offset / count pairs from +8 of the SLCT offsets (8 bytes each, offset into the SLCT section
-    first), an unknown table, the SLCT section, the code section (xV4, the code areas) and the control sections (0x880 each), all relative to the HCPS. An SLCT: 'SLCT', u32, u32 count / offset of
-    strings, u32 count / offset of programs ({u32 offset, u32 length} of each program's NVSD), then from +0x28 u32 control offset / length and code offset / length of its programs, which follow each
-    other in both sections. An NVSD lists its stages from +0x18 (u32 offset / count of 20-byte entries {u32 stage index, u32 code offset, u32 code length, u32 control offset, u32 control length},
-    relative to the program's start in each section). A program's vertex / pixel stages are a pair"""
-    try:
-        ver, so, sc, _, _, slo, sll, xo, xl, uo, ul = struct.unpack_from('<11I', d, b + 4)
-    except struct.error: return None
-    if not (0 < sc < 0x100000 and b + max(so + 8 * sc, slo + sll, xo + xl, uo + ul) <= len(d)): return None   # 'HCPS' in other data
-    sl, xv4, ctls, out = d[b + slo:b + slo + sll], d[b + xo:b + xo + xl], d[b + uo:b + uo + ul], []
-    if xv4[:4] not in (GFX_MAGIC, CS_MAGIC): return None   # a PC build's archive (GLSL; XC3's first DLC still carries six .pcsmt files), which the Switch game never loads
-    for k in range(sc):
-        s = sl[struct.unpack_from('<I', d, b + so + 8 * k)[0]:]
-        if s[:4] != b'SLCT': red(f'{label} HCPS @{b:#x} (version {ver}): SLCT {k} has no magic')
-        uc, _, xc, _ = struct.unpack_from('<4I', s, 0x28)
-        for where, st, ctl, code in slct_programs(s, xv4, xc, ctls, uc, f'{label} HCPS @{b:#x} SLCT {k}', strict=True):
-            out.append((f'{label}#HCPS@{b:#x}#slct{k}#{where}', st, ctl, code))
-    return out
 
-def slct_programs(s, xv4, xc, ctls, uc, label, strict):
-    """The programs of an SLCT (s: its bytes on): each program's stages, their code areas from xv4[xc:] and control sections from ctls[uc:], the programs following each other in both.
-    → [('var<program>', stage, control, code)]; strict: a stage that does not check is a red line, else the whole SLCT is taken for no shader (None)"""
-    _, _, _, npr, opr = struct.unpack_from('<5I', s, 4); out = []
-    for p in range(npr):
-        po, pl = struct.unpack_from('<II', s, opr + 8 * p); nv = s[po:po + pl]
-        eo, en = struct.unpack_from('<II', nv, 0x18); xe = ue = 0
-        for si, co, cl, to, tl in (struct.unpack_from('<5I', nv, eo + 20 * i) for i in range(en)):
-            if not cl: continue
-            code, ctl = xv4[xc + co:xc + co + cl], ctls[uc + to:uc + to + tl]
-            st = 'cs' if code[:4] == CS_MAGIC else sph_stage(code) if code[:4] == GFX_MAGIC else 'cs' if LOOSE_MONO and si == 5 else None   # stage 5 is compute: Xenoblade Chronicles: Definitive Edition's has no code header (shd_lgt / shd_post.wishp)
-            why = 'no code area header' if not st else check(label, st, ctl, code)
-            if why and strict: red(f'{label} program {p} stage {si}: {why}')
-            if why: return None
-            out.append((f'var{p}', st, ctl, code)); xe, ue = max(xe, co + cl), max(ue, to + tl)
-        xc, uc = xc + xe, uc + (ue + 7 & ~7)   # control sections are 8-byte aligned (main's are 0x9e1, 0x87f … bytes long)
-    return out
-
-def slct_loose(d, label):
-    """SLCTs outside an HCPS, their offsets relative to the SLCT itself (Xenoblade Chronicles 3's main+0x14e01c0: three programs of the engine's own, 6 shaders, controls at +0x368, code at
-    +0x4000, used from the title screen on). Taken only when every stage checks (slct_programs), so an 'SLCT' in other data adds nothing"""
+def hcps_shaders(d, base, label):
+    """HCPS shader programs (Monolith's wishp, also embedded in models/map
+    streams). SLCT gives the control/code ranges and variant descriptors; each
+    NVSD's final stage record gives their sizes. Pair stages within each variant.
+    Layout cross-checked against xc3_lib/src/spch.rs and the game's own bytes."""
+    def span(off, n):
+        if off < base or off > len(d) or n > len(d) - off: red(f'{label} HCPS @{base:#x}: section out of bounds')
+        return d[off:off + n]
+    span(base, 72)
+    table, count = struct.unpack_from('<2I', d, base + 8)
+    slct_off, slct_size, code_off, code_size, ctl_off, ctl_size = struct.unpack_from('<6I', d, base + 24)
+    span(base + table, count * 8)
+    slcts, codes, ctls = (span(base + o, n) for o, n in ((slct_off, slct_size), (code_off, code_size), (ctl_off, ctl_size)))
+    if not code_size and not ctl_size: return []   # source-only GLSL programs (DLC model streams), no NVN binaries to extract
     out = []
-    for m in re.finditer(b'SLCT', d):
-        b = m.start()
-        try:
-            uc, un, xc, xn = struct.unpack_from('<4I', d, b + 0x28)
-            if not (0 < un and 0 < xn and b + max(uc + un, xc + xn) <= len(d) and d[b + uc:b + uc + 4] == CTL_MAGIC and d[b + xc:b + xc + 4] in (GFX_MAGIC, CS_MAGIC)): continue
-            r = slct_programs(d[b:], d[b:], xc, d[b:], uc, f'{label} SLCT @{b:#x}', strict=False)
-        except struct.error: continue
-        if r: out += [(f'{label}#SLCT@{b:#x}#{w}', st, ctl, code) for w, st, ctl, code in r]
+    for i in range(count):
+        s = struct.unpack_from('<I', d, base + table + 8 * i)[0]
+        if s + 72 > len(slcts) or slcts[s:s + 4] != b'SLCT': red(f'{label} HCPS: invalid SLCT {i}')
+        num, ptr = struct.unpack_from('<2I', slcts, s + 16)
+        c, cn, k, kn = struct.unpack_from('<4I', slcts, s + 40)
+        ce, ke = c + cn, k + kn
+        if s + ptr + num * 8 > len(slcts) or ce > len(ctls) or ke > len(codes): red(f'{label} HCPS SLCT {i}: variant range out of bounds')
+        for j in range(num):
+            po, pn = struct.unpack_from('<2I', slcts, s + ptr + j * 8); p = s + po
+            if pn < 32 or p + pn > len(slcts): red(f'{label} HCPS: invalid NVSD')
+            vo, vn = struct.unpack_from('<2I', slcts, p + 24)
+            if not vn or vo + vn * 20 > pn: red(f'{label} HCPS: invalid NVSD stage records')
+            _, vs, ps, vc, pc = struct.unpack_from('<5I', slcts, p + vo + (vn - 1) * 20)
+            pend, kend = c + vc + pc, k + vs + ps
+            if pend > ce or kend > ke: red(f'{label} HCPS: program exceeds SLCT range')
+            # A vertex bundle can include a geometry stage (shd_lgt.wishp:
+            # 768-byte vertex + 256-byte geometry, two 0x880 controls). NVSD's
+            # vertex size covers both; each NVN control gives its own code size.
+            while c < pend:
+                # One asset can contain both Maxwell and NVN2 HCPS programs
+                # (Xenoblade X DE). Read each control's own version and lengths.
+                if c + NVN2_KEY_CTL > pend: red(f'{label} HCPS: truncated control')
+                nvn2 = nvn2_ctl(ctls[c:c + NVN2_KEY_CTL])
+                if not nvn2 and c + 0x708 > pend: red(f'{label} HCPS: truncated control')
+                nc = struct.unpack_from('<I', ctls, c + (0x30 if nvn2 else 0x20))[0]
+                nk = struct.unpack_from('<I', ctls, c + (0x44 if nvn2 else 0x704))[0]
+                if nc < (NVN2_KEY_CTL if nvn2 else 0x760) or c + nc > pend or not nk or k + nk > kend: red(f'{label} HCPS: shader exceeds program range')
+                ctl, code = ctls[c:c + nc], codes[k:k + nk]; c += (nc + 7) & ~7; k += nk
+                st = nvn2_stage(ctl, code) if nvn2 else glslc_stage(ctl, code)
+                why = check(label, st, ctl, code) if st else 'unknown stage'
+                if why: red(f'{label} HCPS SLCT {i} variant {j}: {why}')
+                out.append((f'{label}#HCPS@{base:#x}#var{i}.{j}', st, ctl, code))
+            if k != kend: red(f'{label} HCPS: unused program code bytes')
+        if c != ce or k != ke: red(f'{label} HCPS SLCT {i}: unused control/code bytes')
     return out
 
-def mono_shaders(d, label, out, depth=0):
-    """Shader archives in a Monolith file: HCPS in the file itself (.wishp, .wimdo models, .wiefxa effects, .wipac) or in its xbc1 streams (.wismt model and .wismda map streams)"""
-    for m in re.finditer(HCPS, d):
-        r = spch_shaders(d, m.start(), label)
-        if r: out.extend(r)
-    if depth: return
-    for m in re.finditer(XBC1, d):
-        try: s = xbc1(d, m.start())
-        except Exception: continue   # 'xbc1' in other data (bad lengths, zlib / zstd errors)
-        mono_shaders(s, f'{label}#xbc1@{m.start():#x}', out, 1)
 
-def ard_shaders(path, rel, ents, out):
-    """A range of a Monolith archive's files (ard_jobs), each taken out of its xbc1 container and scanned (mono_shaders)"""
+def slct_shaders(d, base, label):
+    """A standalone SLCT has its control/code offsets relative to itself.
+    Monolith embeds this form in main, without an HCPS header. Present those
+    same relative sections to the HCPS reader; no code or control bytes change.
+    Its text-bearing control sections are individually aligned to eight bytes."""
+    if base + 72 > len(d): return []
+    c, cn, k, kn = struct.unpack_from('<4I', d, base + 40)
+    size = max(c + cn, k + kn)
+    if min(c, k) < 72 or size > len(d) - base: return []
+    header = bytearray(80); header[:4] = b'HCPS'
+    struct.pack_into('<2I', header, 8, 72, 1)
+    struct.pack_into('<6I', header, 24, 80, size, 80, size, 80, size)
+    return hcps_shaders(bytes(header) + d[base:base + size], 0, f'{label}#SLCT@{base:#x}')
+
+
+def monolith_shaders(d, label, out):
+    """Scan decoded archive entries and their XBC1 streams without relying on
+    extensions: model streams and map data embed HCPS alongside other assets."""
+    # An NDSR pack (the upscaler's networks): Xenoblade Chronicles 2's Switch 2 Edition keeps /monolib/shader/ndsr.pck as an XBC1 member of bf2.ard, whose decoded
+    # payload comes back here; without this its 9 shaders the title screen draws with were left out (Xenoblade DE's Switch 2 Edition ships the same pack loose)
+    if d[:4] == b'NDSR' and 'ndsr_shaders' in globals(): out.extend(ndsr_shaders(d, label)); return
+    pos = 0; compressed = []
+    # Separate literal scans use Python's fast substring search. Alternation's
+    # character-set search is costly across the archive's decoded texture data.
+    markers = sorted((m.start(), magic == b'xbc1', len(magic)) for magic in (b'xbc1', b'cmp\0zlib') for m in re.finditer(magic, d))
+    for off, xbc, size in markers:
+        if off < pos: continue
+        result = xbc_data(d, off) if xbc else monolith_cmp_data(d, off)
+        pos = off + size if result is None else result[1]
+        if result is not None:
+            compressed.append((off, pos))
+            monolith_shaders(result[0], f'{label}#{"XBC1" if xbc else "cmp-zlib"}@{off:#x}', out)
+    ci = 0
+    for m in re.finditer(b'HCPS', d):
+        base = m.start()
+        while ci < len(compressed) and compressed[ci][1] <= base: ci += 1
+        if ci < len(compressed) and compressed[ci][0] <= base: continue   # a zstd literal is not a decoded container
+        if base + 8 <= len(d) and struct.unpack_from('<I', d, base + 4)[0] in (1000, 1010): out.extend(hcps_shaders(d, base, label))
+    # Effect asset packs keep complete GLSLC outputs alongside HCPS programs.
+    # As above, compressed literals are visited only after decoding their stream.
+    out.extend(glslc_shaders(d, label, need=False, skip=compressed))
+
+
+def arh_shaders(path, rel, entries, out):
     with open(path, 'rb') as f:
-        for name, off, csz, usz, t in ents:
-            f.seek(off); d = f.read(csz + (0x30 if t == 2 else 0))
-            if t == 2:
-                if d[:4] != XBC1: red(f'/{rel}{name}: type 2 without an xbc1 container')
-                d = xbc1(d)
-            if HCPS in d or XBC1 in d: mono_shaders(d, f'/{rel}{name}', out)
-            # GLSLC outputs: the Firehawk effect archives (.wipac, 'FirehawkAssetArchive') keep their effects' shaders as whole compiler outputs beside a few HCPS
-            if b'\x91\x68\x86\x19' in d: out.extend(glslc_shaders(d, f'/{rel}{name}', need=False))
-            # ... and more of them in zlib streams of their own inside the file ('cmp\0zlib', upstream nxnative's monolith_cmp_data): 4,412 effect shaders of Xenoblade Chronicles 3
-            # (.wipac, .wiefxa), among them the particles' update (vertex 09bd50b78ed863f0, geometry 293ecebc0136519b). Without them the husks' red particles, the send-off's
-            # white ones, the glow of far items and many cutscene effects were missing, and the app captured a few of them at run time
-            if CMPZ in d:
-                for m in re.finditer(CMPZ, d):
-                    z = cmp_zlib(d, m.start())
-                    if z is None: continue
-                    lab = f'/{rel}{name}#cmp-zlib@{m.start():#x}'
-                    if HCPS in z or XBC1 in z: mono_shaders(z, lab, out)
-                    if b'\x91\x68\x86\x19' in z: out.extend(glslc_shaders(z, lab, need=False))
+        for name, off, size in entries:
+            f.seek(off); data = f.read(size)
+            monolith_shaders(data, f'/{rel}{name}', out)
+
+
+GZIP_FLOOR = 1 << 30   # ungzip's budget for any file: deflate reaches about 1000x on repetitive data, and a file over budget counts as unreadable, which stops a registered game's build even if it holds no shaders
+
+
 
 UE_LEGACY = 'UE legacy pak'
 def ue_legacy_jobs(files, parts=64, *, archive_paks=()):
@@ -1701,6 +1778,9 @@ def scan_blob(d, label, out):
     if d[:4] == b'SARC':
         for nm, m in sarc_members(d): scan_blob(m, f'{label}/{nm}', out)
         return
+    if d[:4] in (b'HCPS', b'xbc1', b'DRSM', b'DMPA') or d[:8] == b'cmp\0zlib':
+        monolith_shaders(d, label, out)
+        return
     if d[:4] == b'BAHS': out.extend(bahs_shaders(d, label)); return
     if d[:4] == b'MSHD': out.extend(mshd_shaders(d, label)); return
     if d[:4] == PGDAT and len(d) >= 0x1c and (mem := pgdat_members(d, label)) is not None:   # PlatinumGames
@@ -1712,7 +1792,7 @@ def scan_blob(d, label, out):
         size = struct.unpack_from('<I', d, m.start() + 0x1c)[0]
         if m.start() + size <= len(d) and d[m.start() + 0x60:m.start() + 0x64] == b'grsc': out.extend(bnsh_shaders(d, m.start(), label))
     if has(d, MGFX): out.extend(mgfx_shaders(d, label))
-    if has(d, b'SLCT'): out.extend(slct_loose(d, label))   # Monolith SLCTs outside an HCPS (Xenoblade Chronicles 3's main)
+    for m in re.finditer(b'SLCT\x03\x10\0\0', d): out.extend(slct_shaders(d, m.start(), label))   # standalone Monolith SLCTs
 
 def group(label):
     """source group (second half of the package file name)"""
@@ -2033,8 +2113,8 @@ def scan_file(args):
     if len(args) > 2 and args[2][0] == LSPK:   # members of a Larian package (lspk_jobs)
         lspk_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
-    if len(args) > 2 and args[2][0] == MONO_ARD:   # files of a Monolith archive (ard_jobs)
-        ard_shaders(path, rel, args[2][1], found)
+    if len(args) > 2 and args[2][0] == ARH:   # files of a Monolith archive (ard_jobs)
+        arh_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and args[2][0] == UE_LEGACY:   # files of a legacy Unreal pak (ue_legacy_jobs)
         ue_legacy_shaders(path, rel, args[2][1], found)
@@ -2091,7 +2171,7 @@ def scan_file(args):
         import unityfs
         try: unity_shaders(d, '/' + rel, found, trees if not TREES else dict(TREES))
         except unityfs.NoTree: return rel, {}, set(), 'defer'
-    elif not has(d, b'BNSH\0\0\0\0') and not has(d, b'BAHS') and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and has(d, b'Yaz0')) and not has(d, b'\x91\x68\x86\x19') and not has(d, MGFX): return rel, {}, set(), {}   # a SARC may hold Yaz0 members
+    elif not has(d, b'BNSH\0\0\0\0') and not has(d, b'BAHS') and d[:4] != b'MSHD' and not (d[:4] == b'SARC' and has(d, b'Yaz0')) and not has(d, b'\x91\x68\x86\x19') and not has(d, MGFX) and not (d[:4] in (b'HCPS', b'xbc1', b'DRSM', b'DMPA') or d[:8] == b'cmp\0zlib'): return rel, {}, set(), {}   # a SARC may hold Yaz0 members; Monolith loose containers are read by scan_blob
     else:
         scan_blob(d, '/' + rel, found)
         # whole GLSLC outputs in a file no other reader takes (FINAL FANTASY TACTICS - The Ivalice Chronicles: its engine's technique files, resources_nx/…/shader/*.tec, 261 outputs beside
@@ -2202,7 +2282,7 @@ def main():
     bd_jobs, bdts = bdt_jobs(files)   # Dark Souls Remastered's dvdbnd archives: the entries of each .bdt by its .bhd5 index, in ranges
     arc_jobs, arcs = smash_arc_jobs(files)   # Super Smash Bros. Ultimate's data.arc: its current files, in ranges
     pz_jobs, pkzs = pkz_jobs(files)   # Bayonetta 3's PKZ archives, Oodle Kraken decoded by the game's own decoder in the Mac host
-    ar_jobs, ards = ard_jobs(files)   # Xenoblade Chronicles 3's archive (bf3.arh / bf3.ard)
+    ar_jobs, ards = arh_jobs(files)   # Monolith's archives (ARH1: Xenoblade 3; ARH2: Xenoblade X)
     cp_jobs, cpks = cpk_jobs(files)   # CRI CPK entries, decoded and scanned recursively (PlatinumGames DATs)
     ls_jobs, lspks = lspk_jobs([(p, r) for p, r in files if p not in paks])   # Divinity: Original Sin 2's Larian packages (and their footerless _N parts)
     big += cp_jobs + pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ar_jobs + ls_jobs + ea_jobs

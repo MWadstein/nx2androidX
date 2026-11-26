@@ -33,6 +33,27 @@ class ApkProfilesTest(unittest.TestCase):
             self.assertTrue((out / 'settings.tsv').is_file())
             self.assertFalse((out / '0100000000010000').exists())   # the profiles do not
 
+    def test_the_phone_translator_gets_this_trees_assemblies_not_its_launcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'nxnative/dm/gfx/tools/dmsh_xlate_bin'
+            source.mkdir(parents=True)
+            (source / 'dmsh_xlate.dll').write_bytes(b'ampere')
+            (source / 'Ryujinx.Graphics.Shader.dll').write_bytes(b'ampere shader')
+            dst = root / 'tool/tools/dmsh_xlate'
+            dst.mkdir(parents=True)
+            (dst / 'dmsh_xlate').write_bytes(b'phone launcher')
+            (dst / 'dmsh_xlate.dll').write_bytes(b'old')
+            old_assets = assets.REPO
+            assets.REPO = root
+            try:
+                assets.translator_dlls(root / 'tool')
+            finally:
+                assets.REPO = old_assets
+            self.assertEqual((dst / 'dmsh_xlate.dll').read_bytes(), b'ampere')
+            self.assertEqual((dst / 'Ryujinx.Graphics.Shader.dll').read_bytes(), b'ampere shader')
+            self.assertEqual((dst / 'dmsh_xlate').read_bytes(), b'phone launcher')
+
 
 if __name__ == '__main__':
     unittest.main()
