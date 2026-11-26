@@ -15,7 +15,7 @@ The profile sets these for you (`android.tsv`); a player changes the pause menu 
 
 | Row | What it does |
 |---|---|
-| `DM_NVN_ASYNC=1` | asynchronous replay: submissions and presents run on a replay thread, syncs wait for the job's replay and then its GPU fence |
+| `DM_NVN_ASYNC=0` | replay stays on the game's render thread; async replay caused frame spikes and dropped frames in the Odin 3 Portal A/B (2026-11-26) |
 
 Read the profile's porting log in the comment header of [`android.tsv`](android.tsv). Back to the [games list](../../../../README.md#games).
 <!-- end of the game facts -->

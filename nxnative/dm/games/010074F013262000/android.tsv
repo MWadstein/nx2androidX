@@ -18,7 +18,8 @@ tested	v655360 Lenovo Legion Y700 TB322FC (Snapdragon 8 Elite, Adreno 830, Andro
 package	org.nx2a.xc3
 orientation	landscape
 graphics	nvn
-env	DM_NVN_ASYNC=1
+# Async replay was tried here because the game's own rendering overlapped the replay thread. On the Odin 3 Portal (2026-11-26) an A/B with the same FPSLocker config found the opposite: with DM_NVN_ASYNC=1 the warm 60 fps window had frame p95 17.75 / max 56.73 ms, 12 dropped frames of 300 and submit+present max 49.29 ms; with async off those became p95 18.21-19.25 / max 23.21-27.10 ms, 0 dropped frames of 300 and submit+present max 13.61-23.67 ms. The user also felt no load hitching and only 1-2 hitches after combat. Keep the replay on the render thread for this game; the remaining hitches need their own investigation.
+env	DM_NVN_ASYNC=0
 readme_image	docs/images/xenoblade-chronicles-3.jpg
 readme_tag	v0.1.0
 readme_note	update 2.2.0 · 30 fps · **work in progress**: some effects and models don't draw yet
