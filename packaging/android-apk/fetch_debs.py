@@ -97,7 +97,8 @@ def extract_deb(data, dest):
             for m in members:
                 # The filter keyword only exists from the release that carries tar_filter (3.12,
                 # backported); a system python (macOS ships 3.9) rejects it even when the value is None.
-                t.extract(m, dest, **({'filter': 'tar'} if hasattr(tarfile, 'tar_filter') else {}))        return
+                t.extract(m, dest, **({'filter': 'tar'} if hasattr(tarfile, 'tar_filter') else {}))
+            return
     raise RuntimeError('no data.tar in the .deb')
 
 
