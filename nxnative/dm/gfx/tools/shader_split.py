@@ -1686,18 +1686,26 @@ def zs_dicts(romfs):
     d = zstd_mod().decompress(read_whole(p))
     return {struct.unpack_from('<I', m, 4)[0]: m for _, m in sarc_members(d) if m[:4] == bytes.fromhex('37a430ec')}
 
+def zs_dict_id(d):
+    """The dictionary ID named by a zstd frame header, 0 when it names none."""
+    fhd = d[4] if len(d) > 5 and d[:4] == ZSTD_MAGIC else 0
+    n, o = (0, 1, 2, 4)[fhd & 3], 6 - (fhd >> 5 & 1)   # dictionary ID size; it follows the window descriptor, which single-segment frames omit
+    return int.from_bytes(d[o:o + n], 'little')
+
+def unzs_dict(d, did, where):
+    """A zstd frame that names dictionary did, decompressed with the dictionary from ZDICTS."""
+    zstd = zstd_mod()
+    if did not in ZDICTS: red(f'{where}: a frame needs zstd dictionary {did}, which Pack/ZsDic.pack.zs does not have')
+    if did not in _ZD: _ZD[did] = zstd.ZstdDict(ZDICTS[did])
+    return zstd.decompress(d, zstd_dict=_ZD[did])
+
 def unzs(path):
     """A zstd file decompressed: frames without a dictionary as they are, frames that name one with that dictionary from ZDICTS. The zstd module, not the zstd command: Windows has no
     such command (Mario vs. Donkey Kong's .zs shaders stopped the split there), and the porter already requires the module"""
     d = read_whole(path, map_ok=False)   # a frame is decompressed whole: it has to fit in memory
-    fhd = d[4] if len(d) > 5 and d[:4] == bytes.fromhex('28b52ffd') else 0
-    n, o = (0, 1, 2, 4)[fhd & 3], 6 - (fhd >> 5 & 1)   # dictionary ID size; it follows the window descriptor, which single-segment frames omit
-    did = int.from_bytes(d[o:o + n], 'little')
-    zstd = zstd_mod()
-    if not did: return zstd.decompress(d)
-    if did not in ZDICTS: red(f'{path}: a frame needs zstd dictionary {did}, which Pack/ZsDic.pack.zs does not have')
-    if did not in _ZD: _ZD[did] = zstd.ZstdDict(ZDICTS[did])
-    return zstd.decompress(d, zstd_dict=_ZD[did])
+    did = zs_dict_id(d)
+    if not did: return zstd_mod().decompress(d)
+    return unzs_dict(d, did, path)
 
 LZ4_FRAME_MAGIC = bytes.fromhex('04224d18')   # an LZ4 frame (lz4.frame); HAL's .cmp containers hold these as well as zstd frames
 
@@ -1720,15 +1728,18 @@ def unsized(d, where):
     it is returned unchanged. A frame that fails to decompress, or decompresses to another size than the prefix, is a red line and the file is scanned as it is"""
     size, frame = struct.unpack_from('<I', d)[0], d[4:]
     if frame_size(frame) not in (None, size): return d
+    did = zs_dict_id(frame)
     try:
         if frame[:4] == LZ4_FRAME_MAGIC:
             import lz4.frame
             out = lz4.frame.decompress(frame)
-        else: out = zstd_mod().decompress(frame)
+        elif did and did not in ZDICTS: out = None
+        else: out = unzs_dict(frame, did, where) if did else zstd_mod().decompress(frame)
     except Exception as e: why = str(e) or type(e).__name__
     else:
-        if len(out) == size: return out
-        why = f'{len(out)} bytes where the prefix gives {size}'
+        if out is None: why = f'the frame needs zstd dictionary {did}, which Pack/ZsDic.pack.zs does not have'
+        elif len(out) == size: return out
+        else: why = f'{len(out)} bytes where the prefix gives {size}'
     print(f'[RED] {where}: a size-prefixed frame did not decompress ({why}); scanned as it is', flush=True)
     return d
 
