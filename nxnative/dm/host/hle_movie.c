@@ -690,6 +690,21 @@ HLE_FORCE("_ZN5movie7Decoder24SendInputBufferForDecodeEiiilj", "movie decoder: s
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (i < 0 || i >= MD_NIN || off < 0 || size < 0 || (uint32_t)off + (uint32_t)size > MD_INCAP) return 0x100b;
     pthread_mutex_lock(&d->mu);
+    for (int k = 0; k < d->npend; k++) if (d->pend[k].in == i) { pthread_mutex_unlock(&d->mu); if (!d->red_dec++) LOG("[RED] movie: input index %d sent twice, the second packet is dropped (first case)", i); return 0x100b; }
+    // ACodec::BaseState::onInputBufferFilled takes ownership of a client buffer but keeps it once mPortEOS[input] is set; MediaCodec's queueInputBuffer still succeeds.
+    // Inputs already acquired before EOS can arrive afterwards, with or without the flag. Tied Together's Unity player submits all four held indices as EOS; decoding each
+    // one produced four end-of-stream outputs and the first completion handler freed the event list the later ones still walked. The World Ends with You -Final Remix-
+    // sent one EOS with each held input too (main+0x11e06b8), and when two were fired in one frame the first destroyed the player under the loop (main+0x11e3008).
+    // Return a client's held buffer only once, with no decode or signal. A queued or decoding input is not client-owned; a Flush-returned one is already in the free list.
+    if (d->in_eos) {
+        if (!d->inown[i] && !d->instale[i]) { pthread_mutex_unlock(&d->mu); return 0x100b; }
+        if (d->inown[i]) d->infree[d->ninfree++] = i;   // a stale buffer was already returned by Flush / Stop
+        d->inown[i] = d->instale[i] = 0;
+        pthread_mutex_unlock(&d->mu);
+        MD_TRACE(d, 7, "SendInputBufferForDecode index %d after end of stream: returned without decoding", i);
+        return 0;
+    }
+    if (d->npend == MD_NIN) { pthread_mutex_unlock(&d->mu); if (!d->red_dec++) LOG("[RED] movie: more packets pending than input buffers, one dropped (first case)"); return 0x100b; }
     // An index the client acquired before a Flush and sends after it (Big Brain Academy: Brain vs. Brain loops its activity previews this way): the flush put it back in the free list,
     // so it is claimed from there now. Before, it could be handed out a second time, two packets shared one buffer (VideoToolbox -12909 on the overwritten one) and the fifth pending
     // packet wrote past pend[] into npend and dmu (the process died destroying dmu, 2 runs in 5)
@@ -699,24 +714,13 @@ HLE_FORCE("_ZN5movie7Decoder24SendInputBufferForDecodeEiiilj", "movie decoder: s
         break;
     }
     d->inown[i] = d->instale[i] = 0; d->in_ns = now_ns();
-    // A second end-of-stream packet (one the client acquired before it sent the first) gives no output: a stream ends once, as with MediaCodec, whose input port takes nothing after EOS.
-    // The World Ends with You -Final Remix-'s Unity player sends one with each of the 4 inputs it holds when its extractor ends; each became an end-of-stream output, each output queues a
-    // "movie ended" event (main+0x11e06b8), and when two were fired in one frame the first one's handler destroyed the player under the loop firing them (crash at main+0x11e3008, 1 run in 2)
-    if ((flags & 4) && d->in_eos) {
-        d->infree[d->ninfree++] = i;
-        pthread_mutex_unlock(&d->mu);
-        MD_TRACE(d, 7, "SendInputBufferForDecode index %d: another end-of-stream packet after the first, no output", i);
-        return 0;
-    }
     if (md_held(d)) md_defer_at(d, 1, d->in_ns + md_idle_ns(d) + 50000000ull);   // Unity waits for the output event: one comes if no packet follows (md_tail)
-    if (flags & 4) d->in_eos = 1;   // the last input until Flush / Stop (h_movie_AcqIn)
-    for (int k = 0; k < d->npend; k++) if (d->pend[k].in == i) { pthread_mutex_unlock(&d->mu); if (!d->red_dec++) LOG("[RED] movie: input index %d sent twice, the second packet is dropped (first case)", i); return 0x100b; }
-    if (d->npend == MD_NIN) { pthread_mutex_unlock(&d->mu); if (!d->red_dec++) LOG("[RED] movie: more packets pending than input buffers, one dropped (first case)"); return 0x100b; }
     int fmt_now = 0;
     if (d->type == MD_TYPE_VP9 && !d->w && size > 0 && vp9_size(d->in[i] + off, size, &d->w, &d->h)) LOG("[movie] VP9 key frame: %d×%d", d->w, d->h);
     if (d->type == MD_TYPE_VP8 && !d->w && size > 0 && vp8_size(d->in[i] + off, size, &d->w, &d->h)) LOG("[movie] VP8 key frame: %d×%d", d->w, d->h);
     if (!d->fmt_sent) { d->fmt_sent = 1; fmt_now = 1; if (!d->w && !MD_AUDIO(d)) { d->w = 1920; d->h = 1080; } }   // the size is fixed from here on (slots are allocated by it)
     d->pend[d->npend].in = i; d->pend[d->npend].off = off; d->pend[d->npend].size = size; d->pend[d->npend].pts = pts; d->pend[d->npend].flags = flags; d->npend++;
+    if (flags & 4) d->in_eos = 1;   // commit only an accepted end-of-stream packet: no more input until Flush / Stop
     int queued = d->npend;
     pthread_mutex_unlock(&d->mu);
     MD_TRACE(d, 7, "SendInputBufferForDecode index %d offset %d length %d time %lld µs flags %#x (%d packets queued)", i, off, size, (long long)pts, flags, queued);
