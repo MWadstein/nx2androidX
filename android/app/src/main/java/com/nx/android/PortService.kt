@@ -57,6 +57,7 @@ class PortService : Service() {
         const val FIRMWARE = "firmware";
         const val MT = "mt";
         const val LOW_MEM = "lowmem"
+        const val ALLOW_DAMAGED = "allowdamaged"
         const val PACK_DIR = "packDir"
         // The Intent's extras: the port's parameters, handed over from the UI to the service
         // Intent 的 extra：移植的参数，从界面交到服务手里
@@ -71,6 +72,7 @@ class PortService : Service() {
             sharedFont: String = "", firmware: String = "", mtReplay: Boolean = false,
             packDir: String? = null,
             lowMem: Boolean = false,
+            allowDamaged: Boolean = false,
         ) {
             val i = Intent(ctx, PortService::class.java)
                 .setAction(ACTION_START)
@@ -81,6 +83,7 @@ class PortService : Service() {
             if (firmware.isNotBlank()) i.putExtra(FIRMWARE, firmware)
             if (mtReplay) i.putExtra(MT, true)
             if (lowMem) i.putExtra(LOW_MEM, true)
+            if (allowDamaged) i.putExtra(ALLOW_DAMAGED, true)
             if (!packDir.isNullOrBlank()) i.putExtra(PACK_DIR, packDir)
             ContextCompat.startForegroundService(ctx, i)
         }
@@ -157,6 +160,7 @@ class PortService : Service() {
             sharedFont = intent.getStringExtra(FONT) ?: "",
             mtReplay = intent.getBooleanExtra(MT, false),
             lowMem = intent.getBooleanExtra(LOW_MEM, false),
+            allowDamaged = intent.getBooleanExtra(ALLOW_DAMAGED, false),
         )
         val began = try { operations.beginBuild(game, cfg) } catch (e: Exception) {
             AppLog.line("[RED] Build history could not be saved: ${e.message}")
@@ -189,7 +193,7 @@ class PortService : Service() {
                 intent.getIntExtra(ALIAS, ALIAS_AUTO),
                 intent.getStringExtra(FONT) ?: "", intent.getStringExtra(FIRMWARE) ?: "",
                 intent.getBooleanExtra(MT, false), intent.getStringExtra(PACK_DIR),
-                intent.getBooleanExtra(LOW_MEM, false),
+                intent.getBooleanExtra(LOW_MEM, false), intent.getBooleanExtra(ALLOW_DAMAGED, false),
             ) {
                 handler.post {
                     if (runner === taskRunner) {

@@ -35,6 +35,7 @@ def _parser():
     po.add_argument('--replace-signer', action='store_true', help='uninstall an app of the same package signed with another key first (deletes its saves) (with --game-apk)')
     po.add_argument('--debug', action='store_true', help='a development build: debug information, debuggable, DM_CTL key presses')
     po.add_argument('--experimental', action='store_true', help='try a game not ported to Android yet (a profile guessed from a survey of its files; it may not start)')
+    po.add_argument('--allow-damaged', action='store_true', help='write files that fail the NCA hash check as read and go on instead of stopping (an incomplete copy or a broken download)')
     po.add_argument('--package', default='', help="the app's package instead of the profile's (a test install beside another build of the game) (with --game-apk)")
     po.add_argument('--native-keyboard', action='store_true', help='use the Android Unicode keyboard (requires JDK and Android SDK platform/build-tools)')
     po.add_argument('--external-display', action='store_true', help='build the external-screen gamepad activity (requires Android SDK platform and build-tools)')

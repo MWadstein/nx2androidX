@@ -71,6 +71,16 @@ class GameConfigJsonTest {
     }
 
     @Test
+    fun `allow damaged is off by default and survives the round trip`() {
+        assertFalse(GameConfig().allowDamaged)
+        val c = GameConfig(allowDamaged = true)
+        val back = GameConfigJson.decode(GameConfigJson.encode(c))
+        assertEquals(c, back)
+        assertTrue(back.allowDamaged)
+        assertFalse(GameConfigJson.decode(JSONObject().put("touch", true)).allowDamaged)
+    }
+
+    @Test
     fun `legacy filename config migrates to title ID while explicit title config wins`() {
         val legacy = GameConfig(touch = true, fps60 = true)
         val explicit = GameConfig(experimental = true)

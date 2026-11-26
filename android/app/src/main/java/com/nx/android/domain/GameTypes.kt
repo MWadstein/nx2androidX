@@ -80,6 +80,8 @@ data class GameConfig(
     val mtReplay: Boolean = false,
     /** 低内存模式：着色器翻译最多两个进程（慢一些，但内存紧张的机器不会被系统杀掉） */
     val lowMem: Boolean = false,
+    /** 允许损坏的转储：NCA 哈希检查失败的文件也按原样写入（默认关闭，先按正常构建报出原因） */
+    val allowDamaged: Boolean = false,
 )
 
 /**
@@ -94,11 +96,12 @@ object GameConfigJson {
         .put("touch", c.touch).put("fps60", c.fps60).put("exp", c.experimental)
         .put("alias", c.aliasHeadroom)
         .put("font", c.sharedFont).put("mt", c.mtReplay)
-        .put("lowmem", c.lowMem)
+        .put("lowmem", c.lowMem).put("dmg", c.allowDamaged)
 
     fun decode(o: JSONObject): GameConfig = GameConfig(
         o.optBoolean("touch"), o.optBoolean("fps60"), o.optBoolean("exp"), o.optInt("alias", ALIAS_AUTO),
-        o.optString("font", ""), o.optBoolean("mt", false), o.optBoolean("lowmem", false))
+        o.optString("font", ""), o.optBoolean("mt", false), o.optBoolean("lowmem", false),
+        o.optBoolean("dmg", false))
 }
 
 /** Moves filename-keyed legacy options to title IDs once the library can identify their games. */

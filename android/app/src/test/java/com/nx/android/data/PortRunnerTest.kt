@@ -11,9 +11,10 @@ class PortRunnerTest {
     private fun args(aliasHeadroom: Int, touch: Boolean = false, fps60: Boolean = false,
                      experimental: Boolean = false, noLsfg: Boolean = false,
                      sharedFont: String = "", firmware: String = "", mtReplay: Boolean = false,
-                     deviceLanguage: String = "", lowMem: Boolean = false): List<String> =
+                     deviceLanguage: String = "", lowMem: Boolean = false,
+                     allowDamaged: Boolean = false): List<String> =
         PortRunner.portArgs("/sdcard/game.nsp", "/keys/prod.keys", touch, fps60,
-            experimental, aliasHeadroom, noLsfg, sharedFont, firmware, mtReplay, deviceLanguage, lowMem)
+            experimental, aliasHeadroom, noLsfg, sharedFont, firmware, mtReplay, deviceLanguage, lowMem, allowDamaged)
 
     @Test
     fun `Auto passes no address space at all`() {
@@ -48,10 +49,11 @@ class PortRunnerTest {
 
     @Test
     fun `the other options keep their places`() {
-        val a = args(-1, touch = true, fps60 = true, experimental = true, noLsfg = true)
+        val a = args(-1, touch = true, fps60 = true, experimental = true, noLsfg = true, allowDamaged = true)
         assertTrue(a.contains("--touch"))
         assertTrue(a.contains("--fps60"))
         assertTrue(a.contains("--experimental"))
+        assertTrue(a.contains("--allow-damaged"))
         assertTrue(a.contains("--no-lsfg"))
     }
 

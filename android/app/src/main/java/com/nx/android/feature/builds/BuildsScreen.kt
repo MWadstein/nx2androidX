@@ -229,6 +229,7 @@ private fun TaskDetail(lib: LibraryState, record: PortState.Record, viewModel: B
                 stringResource(R.string.builds_touch_game).takeIf { config.touch },
                 stringResource(R.string.builds_60fps).takeIf { config.fps60 },
                 stringResource(R.string.builds_experimental).takeIf { config.experimental },
+                stringResource(R.string.builds_allow_damaged).takeIf { config.allowDamaged },
                 if (config.aliasHeadroom >= 0) stringResource(R.string.builds_alias_short, config.aliasHeadroom) else null,
                 config.sharedFont.takeIf { it.isNotBlank() }?.let { stringResource(R.string.builds_shared_font_short, File(it).name) },
                 stringResource(R.string.builds_mt_replay).takeIf { config.mtReplay },
@@ -239,6 +240,8 @@ private fun TaskDetail(lib: LibraryState, record: PortState.Record, viewModel: B
         else if (!record.logAvailable) Text(stringResource(R.string.builds_log_unavailable), style = MaterialTheme.typography.bodySmall,
             color = NxPalette.Danger)
         LogTail(lines)
+        if (record.phase == PortPhase.FAILED && lines.any { it.contains("NSP is damaged", ignoreCase = true) })
+            Hint(stringResource(R.string.builds_damaged_failure_hint))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { onLog(record.id) }) { Text(stringResource(R.string.builds_log_view)) }
             if (record.logAvailable && lines.isNotEmpty()) TextButton(onClick = { actions.onShareBuildLog(record.id) }) {
@@ -357,6 +360,8 @@ private fun TargetCard(lib: LibraryState, port: BuildsUiState, viewModel: Builds
                 ConfigRow(stringResource(R.string.builds_touch_game), cfg.touch) { cfg = cfg.copy(touch = it); lib.setConfig(f, cfg) }
                 ConfigRow(stringResource(R.string.builds_60fps), cfg.fps60) { cfg = cfg.copy(fps60 = it); lib.setConfig(f, cfg) }
                 ConfigRow(stringResource(R.string.builds_experimental), cfg.experimental) { cfg = cfg.copy(experimental = it); lib.setConfig(f, cfg) }
+                ConfigRow(stringResource(R.string.builds_allow_damaged), cfg.allowDamaged) { cfg = cfg.copy(allowDamaged = it); lib.setConfig(f, cfg) }
+                Hint(stringResource(R.string.builds_allow_damaged_hint), size = 11.sp)
                 AliasRow(cfg.aliasHeadroom) { cfg = cfg.copy(aliasHeadroom = it); lib.setConfig(f, cfg) }
                 Hint(stringResource(R.string.builds_alias_hint), size = 11.sp)
                 // 玩家自己的覆盖：系统字体、固件 dump、多线程回放

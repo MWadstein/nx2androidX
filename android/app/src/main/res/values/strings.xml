@@ -340,6 +340,9 @@
     <string name="builds_touch_game">Touch game (the gamepad starts hidden)</string>
     <string name="builds_60fps">60 fps</string>
     <string name="builds_experimental">Experimental port (a game that is not adapted yet)</string>
+    <string name="builds_allow_damaged">Allow damaged files (test a broken dump as-is)</string>
+    <string name="builds_allow_damaged_hint">Off by default: a failed hash check stops the build and tells you which files are damaged. Turn this on to write those files anyway; a scene or movie may be missing.</string>
+    <string name="builds_damaged_failure_hint">Some files failed their hash check. Re-copy the game, or enable Allow damaged and build again to test it as-is.</string>
     <string name="builds_alias_headroom">Extra address space</string>
     <string name="builds_alias_auto">Auto</string>
     <string name="builds_alias_short">Address space %1$d GB</string>

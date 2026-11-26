@@ -339,6 +339,9 @@
     <string name="builds_touch_game">触屏游戏（隐藏手柄）</string>
     <string name="builds_60fps">60 帧</string>
     <string name="builds_experimental">实验性移植（还没适配的游戏）</string>
+    <string name="builds_allow_damaged">允许损坏的文件（按原样测试损坏的转储）</string>
+    <string name="builds_allow_damaged_hint">默认关闭：哈希检查失败会停止构建并告诉你是哪些文件。打开后仍写入这些文件；某个场景或影片可能缺失。</string>
+    <string name="builds_damaged_failure_hint">有些文件没通过哈希检查。重新拷贝游戏，或者打开「允许损坏的文件」再构建一次，按原样测试。</string>
     <string name="builds_alias_headroom">额外地址空间</string>
     <string name="builds_alias_auto">自动</string>
     <string name="builds_alias_short">地址空间 %1$d GB</string>

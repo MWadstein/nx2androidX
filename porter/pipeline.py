@@ -69,6 +69,7 @@ class Options:
     replace_signer: bool = False       # uninstall an app of the same package signed with another key
     debug: bool = False                # a development build: debug information, debuggable, DM_CTL
     experimental: bool = False         # a game not ported to Android yet: a provisional profile from upstream's survey (or a copy of its iOS profile), status experimental
+    allow_damaged: bool = False        # write RomFS files that fail their NCA hash check as read and go on (the app's "Allow damaged" option; nx_extract's --allow-damaged)
     package: str = ''                  # the app's package instead of the profile's (a test install beside another build of the game)
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
     vulkan_driver: Path = None         # an arm64 Vulkan driver (Mesa's Turnip) packed in the APK and used instead of the system's (DM_VK_DRIVER, dm/android/gfx_vk_core.c)
@@ -410,6 +411,7 @@ class Port:
 
     def _run(self):
         o = self.o
+        nsp.ALLOW_DAMAGED = o.allow_damaged   # nx_extract's flag for damaged dumps; the same module handles every version and the DLC
         expected = os.environ.get('NX2A_PLAYER_API_REVISION')
         if expected is not None and expected != str(PLAYER_API_REVISION):
             raise BuildError('The porting environment does not match this app. Refresh the environment before porting.')
