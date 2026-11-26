@@ -221,6 +221,7 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
     o->magic = MAGIC('P', 'O', 'O', 'L'); o->flags = s->flags; o->mem = s->mem; o->size = s->size; o->vp = NULL; o->vmode = 0;
     if (!o->mem && (o->flags & 0x200)) { uint8_t *vr = vpool_reserve(o); if (vr) o->mem = vr; }   // a virtual pool's own address range until its first mapping decides (see MapVirtual)
     else if (o->mem) { nvn_dirty_add_range(o->mem, o->size); replay_lock(); mtl_pool_add(o->mem, o->size); vk_pool_set_flags(o->mem, o->flags); replay_unlock(); }   // tracked first: Android's lazy pools (gfx_vk_core.c) are only those the tracker holds
+    if (o->mem && !(o->flags & 0x200)) dm_device_share(o->mem, o->size, 1);   // the GPU maps the storage: the host refuses to unmap it until Finalize, as Horizon does (hle_svc.c)
     if (!o->mem && !(o->flags & 0x200)) LOG("[RED] MemoryPoolInitialize: non-virtual pool has no storage flags=%#x size=%#llx", o->flags, o->size);
     if (getenv("DM_NVN_VLOG")) { LOG("[nvn] MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, (unsigned long long)o->size, o->flags); void dm_backtrace(uint64_t fp); dm_backtrace((uint64_t)__builtin_frame_address(0)); }
     OLOG("MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, o->size, o->flags);
@@ -232,7 +233,7 @@ static void ft_drop(const uint8_t *a, uint64_t n);   // first-touch textures ove
 // right after submitting, and the replay then found its index buffers outside every pool and the command memory overwritten: a black screen, the sound going on)
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { nvn_drain(); if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
     if (((pool_t *)p)->mem && !(((pool_t *)p)->flags & 0x200)) {   // A virtual pool's storage is borrowed from a physical pool; do not unregister it
- nvn_dirty_remove_range(((pool_t *)p)->mem); replay_lock(); mtl_pool_del(((pool_t *)p)->mem); replay_unlock(); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); ft_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); }
+ nvn_dirty_remove_range(((pool_t *)p)->mem); replay_lock(); mtl_pool_del(((pool_t *)p)->mem); replay_unlock(); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); ft_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); dm_device_share(((pool_t *)p)->mem, ((pool_t *)p)->size, 0); }
     replay_lock(); mtl_alias_drop_pool(p); replay_unlock(); ((pool_t *)p)->magic = 0; }
 static void ft_flush(const uint8_t *a, uint64_t n);
 NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) {   // see ft_add and nvn_flushed

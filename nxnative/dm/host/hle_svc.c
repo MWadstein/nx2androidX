@@ -102,6 +102,38 @@ static void map_add(uint64_t b, uint64_t n, uint64_t src, uint32_t st) {   // ca
 }
 static void map_del(int i) { g_map[i] = g_map[--g_nmap]; }   // caller holds g_map_lock
 
+// Device-shared memory. On Horizon, NVN gives a pool storage to the GPU through nvmap; the device mapping sets KMemoryAttribute_DeviceShared on those pages, and UnmapPhysicalMemory and a shrinking
+// SetHeapSize refuse any page with that attribute (ResultInvalidCurrentMemory, 0xD401). Without this the host gave the pages back while the GPU's zero-copy buffer kept the old ones: the CPU
+// wrote one copy and the GPU read the other. hle_nvn.c registers each pool's storage here and removes it at Finalize; a range registered twice stays shared until both are gone.
+typedef struct { uint64_t lo, hi; uint32_t n; } dshare_t;
+static dshare_t *g_dshare; static int g_ndshare, g_cdshare;
+static pthread_mutex_t g_dshare_mu = PTHREAD_MUTEX_INITIALIZER;   // a leaf: taken alone by the table operations and by the checks
+void dm_device_share(const void *p, uint64_t size, int share) {
+    uint64_t lo = (uintptr_t)p, hi = lo + size;
+    if (!size || hi < lo) return;
+    pthread_mutex_lock(&g_dshare_mu);
+    int i = 0; while (i < g_ndshare && (g_dshare[i].lo != lo || g_dshare[i].hi != hi)) i++;
+    if (share) {
+        if (i == g_ndshare) {
+            if (g_ndshare == g_cdshare) { g_cdshare = g_cdshare ? 2 * g_cdshare : 64; if (!(g_dshare = realloc(g_dshare, (size_t)g_cdshare * sizeof *g_dshare))) die("device-shared range table"); }
+            g_dshare[g_ndshare++] = (dshare_t){lo, hi, 0};
+        }
+        g_dshare[i].n++;
+    } else if (i < g_ndshare) { if (!--g_dshare[i].n) g_dshare[i] = g_dshare[--g_ndshare]; }
+    else { static int nred; if (nred++ < 8) LOG("[RED] device-shared memory %#llx+%#llx removed but never registered", (unsigned long long)lo, (unsigned long long)size); }
+    pthread_mutex_unlock(&g_dshare_mu);
+}
+static int device_shared(uint64_t addr, uint64_t size, const char *what) {
+    uint64_t lo = 0, hi = 0;
+    pthread_mutex_lock(&g_dshare_mu);
+    for (int i = 0; i < g_ndshare && !hi; i++) if (addr < g_dshare[i].hi && g_dshare[i].lo < addr + size) { lo = g_dshare[i].lo; hi = g_dshare[i].hi; }
+    pthread_mutex_unlock(&g_dshare_mu);
+    static _Atomic int nlog;
+    if (hi && atomic_fetch_add(&nlog, 1) < 8) LOG("[mem] %s %#llx+%#llx refused: it holds device-shared memory (an NVN memory pool's storage %#llx..%#llx), ResultInvalidCurrentMemory as on Horizon",
+                                                  what, (unsigned long long)addr, (unsigned long long)size, (unsigned long long)lo, (unsigned long long)hi);
+    return hi != 0;
+}
+
 // One bit per 4 KB page of the alias region (mapped = 1): Map sets bits, Unmap clears them; returns the number of pages whose state really changed (signed: positive for Map, negative for Unmap)
 static int64_t alias_pages(uint64_t off, uint64_t n, int map) {
     int64_t ch = 0;
@@ -163,6 +195,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
                                               (unsigned long long)APP_POOL, (unsigned long long)DM_GAME_MEM_USED, big_bss_bytes());
             regs[0] = 0x10801; return 0;
         }
+        if (size < g_heap_cur && device_shared((uintptr_t)g_heap + size, g_heap_cur - size, "SetHeapSize shrinking over")) { regs[0] = 0xD401; return 0; }
         int rc = 0;
         if (size > g_heap_cur) rc = mprotect(g_heap + g_heap_cur, size - g_heap_cur, PROT_READ | PROT_WRITE);
         else if (size < g_heap_cur) rc = mprotect(g_heap + size, g_heap_cur - size, PROT_NONE);
@@ -246,6 +279,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     case 0x2C: case 0x2D: {  // MapPhysicalMemory / UnmapPhysicalMemory(addr, size): only allowed inside the alias region (used by the SDK's VammManager)
         uint8_t *a = (uint8_t *)regs[0]; size_t size = regs[1];
         if (a < g_alias || a + size > g_alias + g_alias_cap) { LOG("SVC %#x outside the alias region %p+%#zx", num, a, size); regs[0] = 0xD401; return 0; }
+        if (num == 0x2D && device_shared((uintptr_t)a, size, "UnmapPhysicalMemory")) { regs[0] = 0xD401; return 0; }
         // Profile mem_map_limit: a map that would take the process past the application pool fails with ResultLimitReached, as on Horizon (the pool less the used memory GetInfo reports).
         // Pokémon Legends: Z-A's nninitStartup allocates and frees everything allocatable (pool − 64 MB, mapped at the top of its StandardAllocator region: 12 GB, 4 GB after the cut in its patches.py); the SDK keeps the freed pages mapped
         // and maps new ones for later allocations, until a map fails: then it unmaps the cached block and retries (measured on the Mac: the refused 4 MB map at +0x43e2c000 was followed by
