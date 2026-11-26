@@ -28,7 +28,29 @@ classifies the paths and prints the files a merge would need a human to look at.
 
 Game profiles are reference material, not automatic updates. A profile from upstream is
 read to understand a game; fixes for our build stay in our own profile branch and are
-validated on the device before they land.
+validated on the device before they land. We compare the files on every sweep and pull
+only what our Android build actually consumes; copying a whole folder would overwrite
+`android.tsv` (our app metadata and porting log) and can change shader inputs for a
+build we have not validated. See [TECH_LINEAGE.md](TECH_LINEAGE.md) for attribution.
+
+### What the profile files do here
+
+| File | Used on Android? | Notes |
+|---|---|---|
+| `game.tsv` | Yes | Title/build IDs, module list, memory layout and profile keys; read by the porter and rewriter. |
+| `android.tsv` | Yes | Our layer: status, package, orientation, graphics, env rows and the porting log; drives the app library and generated docs. |
+| `shader_map.tsv` (+ `.conflicts.tsv`) | Yes | Shader keys and stages used by the device split and translator. |
+| `shader_facts.tsv` | Yes | Reflection answers not derivable from code; `shader_vk.py` loads it via `dmsh_facts`, and the host reads `shader_facts_manual.tsv` when a texture answer is wrong. |
+| `shader_pairs.tsv` | Shared format, not an Android runtime input | Pipeline pairs for the Apple chain's build-time pairing; Android records `vk_pipelines.bin` at runtime instead. Kept for profile parity and chain inputs. |
+| `pso_manifest.tsv` | No (legacy here) | Apple's prewarm seed list. Android prewarms from the per-pack pipeline records, so this is not read by our host. |
+| `bf_want.tsv` | No direct Android use | Apple chain's rewritable-sample variant list; declared as a chain input but not used by `shader_vk.py`. |
+| `README.md` | No (documentation) | Upstream's generated game-facts page. Our gallery/checklist are generated from `android.tsv` by `docs/gen_tables.py`; a profile README is optional and not read at runtime. |
+
+Example checked on `010074F013262000` (Xenoblade Chronicles 3): `game.tsv`, all
+shader tables, `.conflicts`, `shader_pairs`, `pso_manifest`, `bf_want` and
+`shader_facts` are byte-identical to `upstream-nx2android/main`. Our `android.tsv`
+adds `graphics nvn` and a `readme_note` row; those are our Android metadata and
+should be kept. Upstream also carries a generated `README.md` we do not need.
 
 ## Where we stand
 
