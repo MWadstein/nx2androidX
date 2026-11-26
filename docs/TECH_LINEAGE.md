@@ -14,11 +14,13 @@ on. It is the companion to [NOTICE.md](../NOTICE.md) (licenses and copyright) an
 | [zFitness/nx2androidX](https://github.com/zFitness/nx2androidX) (also published as `MWadstein/nx2androidX`) | **This fork.** Keeps nx2android's Android app and adds the on-device porter/CLI/rootfs flow. Its README says "Port your own Nintendo Switch games to Android, natively". | shirai91/nx2android | GPL-3.0-or-later; see [NOTICE.md](../NOTICE.md). |
 | [igawa6/peanuts-native](https://github.com/igawa6/peanuts-native) | A sibling Android fork: same core idea, plus a second-screen companion, incremental on-device builds and a 76-game catalog. **Not** built on this fork. | [Banana Native](https://git.eden-emu.dev/moceure/BananaNative), which is based on seedds/nxnative; it follows nx2android findings | The repository's LICENSE is MIT with copyrights for seedds, Swap2-Native contributors and EddizEge; the APK/shader translator as a whole is GPL-3.0-or-later. `PEANUTS.md` calls peanuts a thin overlay on BananaNative and states `upstream/android` is Banana Native and `peanuts` is the overlay. |
 | [Banana Native](https://git.eden-emu.dev/moceure/BananaNative) | Peanuts' immediate upstream; Android launcher and host based on seedds/nxnative. | seedds/nxnative | MIT for the nxnative-derived part; GPL-3.0-or-later where LSFG / GPL shader code is linked. |
+| [LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple) | Apple-side sibling launcher/community fork of nxnative: one-click macOS/Windows build for iPhone/iPad/Mac, 208 game profiles, controller and UI work. A research source for engine/profile findings, not a descendant of this fork. | seedds/nxnative | MIT (`Copyright (c) 2026 seedds`, jhajzhou, LNPANDY and NX2Apple contributors); its Swift/Metal front end is Apple-only, so only portable nxnative changes transfer. |
 | Ryujinx, Eden, switch2mac, Anka Native, kartnative, nsz, etc. | Component libraries and findings credited by the projects above. | — | Listed in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) and in the upstream NOTICE files. |
 
 In short: **nxnative = native ARM engine core; nx2android = Android layer on
 that core; nx2androidX = our fork, adding on-device porting; peanuts-native =
-a sibling Android fork on Banana Native, not a descendant of ours.** We borrow
+a sibling Android fork on Banana Native; NX2Apple = an Apple-side sibling
+launcher fork, research only.** Neither sibling is a descendant of ours. We borrow
 generic fixes from all of them and credit the source in each commit.
 
 ## How we attribute
