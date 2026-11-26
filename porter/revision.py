@@ -21,8 +21,12 @@ roles stay off without a word.
 renamex_np falls back to a three-rename exchange when RENAME_EXCHANGE is unsupported. No new JNI surface, but an
 installed player's runtime was compiled before that host fix and keeps failing to write new slots (errno=95, then a
 failed commit) until it is rebuilt, so every pack's runtime is rebuilt on the next launch after this update.
+10: the host's writable Vulkan caches are keyed on the game build and shader bundle, with a new prewarm record magic:
+installed runtimes need rebuilding so their host rejects the old caches instead of reusing stale driver records.
+11: a queue keeps the raster origin captured when it was created; installed runtimes need rebuilding for the winding
+fix to apply.
 """
-PLAYER_API_REVISION = 9
+PLAYER_API_REVISION = 11
 
 # The game profiles the player imports (a package of nxnative/dm/games/<title ID>/ folders) into their own folder: what the package was cut from.
 # PROFILES_REVISION counts the syncs of upstream's profiles (1: the first sync, seedds/nxnative at PROFILES_COMMIT); PROFILES_COMMIT is the upstream commit the
