@@ -72,3 +72,16 @@ python devtools/upstream_conflict_surface.py --upstream upstream-nx2android/main
    into `integration/all-fixes` so the next build starts from everything that works.
 5. Record what was considered and why it was skipped. A mechanical diff is not a to-do
    list: many upstream-only files are platform front ends or profiles that do not apply.
+
+## Considered and skipped
+
+- `9a4a3c5f8` (stale save handles after rollback): needs upstream's canonical transaction
+  root and per-generation fd table. This fork's `hle_fs.c` has neither, so it would be a
+  full save-core port, not a small fix. Revisit when porting the transaction layer.
+- `a3d58526b` (PG_NONE fault): local `nvn_dirty.c` already has a different span cache and
+  Android-specific protection path; the upstream unit test cannot be transferred as-is.
+- `e4e5ff64e` (`-fwrapv`): the changed compilers are Apple's `xcrun metal` front ends.
+  Android compiles SPIR-V; it does not use those commands.
+- `1e9e3df40`, `1e69c180c`, `0fd9b1c88`: already present or superseded here.
+- Vulkan/Metal front-end commits (`392f98a1`, `d65c0af0`) and all `save_sync.c` / JIT
+  plugin commits: those files are absent or replaced on Android.
