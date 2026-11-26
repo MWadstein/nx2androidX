@@ -17,8 +17,12 @@ so its host is this base's — a pack from 0.3.0 keeps its 0.3.0 host otherwise,
 event, RX/RY appended; the pad table's dev line carries ztrig/rxstick and coded): the app sends them, so a pack's
 runtime has to be rebuilt for the host to read them — the old host takes ten axes and ignores the new rows, and the
 roles stay off without a word.
+9: the host commits save slots on emulated storage (/sdcard): set_guest_name tolerates ENOTSUP from removexattr and
+renamex_np falls back to a three-rename exchange when RENAME_EXCHANGE is unsupported. No new JNI surface, but an
+installed player's runtime was compiled before that host fix and keeps failing to write new slots (errno=95, then a
+failed commit) until it is rebuilt, so every pack's runtime is rebuilt on the next launch after this update.
 """
-PLAYER_API_REVISION = 8
+PLAYER_API_REVISION = 9
 
 # The game profiles the player imports (a package of nxnative/dm/games/<title ID>/ folders) into their own folder: what the package was cut from.
 # PROFILES_REVISION counts the syncs of upstream's profiles (1: the first sync, seedds/nxnative at PROFILES_COMMIT); PROFILES_COMMIT is the upstream commit the
