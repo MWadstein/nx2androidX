@@ -1,6 +1,7 @@
 package com.nx.android.data.drivers
 
 import android.content.Context
+import android.os.Build
 import com.nx.android.domain.drivers.Driver
 import com.nx.android.domain.drivers.DriverRelease
 import dagger.Binds
@@ -28,11 +29,11 @@ class ContextDriverStore @Inject constructor(
 ) : DriverStore {
     override fun list(): List<Driver> = Drivers.list(context)
     override fun ensureShipped(): Boolean = Drivers.ensureShipped(context)
-    override fun install(file: File): Result<Driver> = Drivers.install(context, file)
+    override fun install(file: File): Result<Driver> = Drivers.install(context, file, Build.SUPPORTED_ABIS)
     override suspend fun download(
         release: DriverRelease,
         onProgress: (Float) -> Unit,
-    ): Result<Driver> = DriverCatalog.download(context, release, onProgress)
+    ): Result<Driver> = DriverCatalog.download(context, release, onProgress, Build.SUPPORTED_ABIS)
     override fun remove(id: String): Boolean = Drivers.remove(context, id)
     override fun shippedArchivePresent(): Boolean = Drivers.shippedArchivePresent(context)
 }

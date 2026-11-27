@@ -52,6 +52,7 @@ import com.nx.android.domain.drivers.DriverRepository
 import com.nx.android.data.LosslessDll
 import com.nx.android.app.AppActions
 import com.nx.android.core.ui.LocalAppLocale
+import com.nx.android.game.hud.loaderPresent
 import com.nx.android.core.ui.components.ActionRow
 import com.nx.android.core.ui.components.ChoiceRow
 import com.nx.android.core.ui.components.CheatsHint
@@ -265,6 +266,7 @@ private fun DriversSection(drivers: List<Driver>, repository: DriverRepository, 
                            onDrivers: () -> Unit) {
     val locale = LocalAppLocale.current
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // 装好的驱动。App 自带的那一个也在这里：它是 App 的一部分，没有「装上」这一步，也删不掉
     for (d in drivers) {
@@ -294,7 +296,13 @@ private fun DriversSection(drivers: List<Driver>, repository: DriverRepository, 
             scope.launch {
                 val r = repository.install(f)
                 r.fold(
-                    onSuccess = { actions.onToast(locale.str(R.string.driver_installed, it.label)) },
+                    onSuccess = {
+                        actions.onToast(locale.str(R.string.driver_installed, it.label))
+                        // A valid driver is still useless without the loader in this APK. Say so at the
+                        // point of import as well as at launch; the game would otherwise fall back silently.
+                        if (!loaderPresent(context.applicationInfo.nativeLibraryDir))
+                            actions.onToast(locale.str(R.string.driver_not_loaded))
+                    },
                     onFailure = { actions.onToast(locale.str(R.string.lib_import_failed, failureText(locale, it))) },
                 )
             }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,10 +82,36 @@ class RunOptionsRepositoryImplTest {
             assertTrue(File(pack, "env.txt").readText().contains("DM_VK_DRIVER="))
             assertTrue(!File(pack, "env.txt").readText().contains(builtIn.absolutePath))
 
-            // the player picked another driver: that one is what the row says
+            // a path to a driver that is not installed any more must not be presented as a choice
             File(pack, "env.txt").writeText("DM_VK_DRIVER=/other/driver.so\n")
             val other = repository.read(pack)
-            assertEquals("/other/driver.so", other.driver)
+            assertEquals("", other.driver)
+            assertTrue(other.driverResetToSystem)
+            assertTrue(File(pack, "env.txt").readText().contains("DM_VK_DRIVER="))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a driver that is still installed is kept, and picking a missing one falls back`() = runBlocking {
+        val root = Files.createTempDirectory("nx2a-run-options").toFile()
+        try {
+            val pack = File(root, "pack").apply { mkdirs() }
+            val builtIn = File(root, "drivers/Turnip_Gen8_V39/libvulkan_freedreno.so").apply {
+                parentFile?.mkdirs(); writeText("driver")
+            }
+            val repository = RunOptionsRepositoryImpl(Dispatchers.Unconfined, FakeDrivers(builtIn))
+
+            File(pack, "env.txt").writeText("DM_VK_DRIVER=" + builtIn.absolutePath + "\n")
+            val kept = repository.read(pack)
+            assertEquals(builtIn.absolutePath, kept.driver)
+            assertFalse(kept.driverResetToSystem)
+
+            val picked = repository.update(pack, null, "/gone/driver.so")
+            assertEquals("", picked.driver)
+            assertTrue(picked.driverResetToSystem)
+            assertEquals("", PackEnvStore.current(pack).second)
         } finally {
             root.deleteRecursively()
         }
@@ -109,7 +136,10 @@ class RunOptionsRepositoryImplTest {
 
 /** The drivers the app has: the built-in one (the driver it ships) or none. */
 private class FakeDrivers(private val builtIn: File?) : DriverRepository {
-    private val mutable = MutableStateFlow<List<Driver>>(emptyList())
+    private val mutable = MutableStateFlow<List<Driver>>(
+        builtIn?.let { listOf(Driver("Turnip_Gen8_V39", "Turnip Gen8 V39", "", "Mesa", it, shipped = true)) }
+            ?: emptyList()
+    )
     override val drivers: StateFlow<List<Driver>> = mutable
     override val releases: List<DriverRelease> = emptyList()
     override val shippedRelease: DriverRelease =

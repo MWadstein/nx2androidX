@@ -22,6 +22,8 @@ fun failureText(locale: AppLocale, e: Throwable): String = when (e) {
         Drivers.Refusal.NO_DRIVER -> locale.str(R.string.driver_refused_no_driver)
         Drivers.Refusal.NO_LIBRARY -> locale.str(R.string.driver_refused_no_library)
         Drivers.Refusal.NOT_A_DRIVER -> locale.str(R.string.driver_refused_not_a_driver)
+        Drivers.Refusal.BAD_ELF -> locale.str(R.string.driver_refused_bad_elf)
+        Drivers.Refusal.WRONG_ABI -> locale.str(R.string.driver_refused_wrong_abi)
     }
     is SaveBackup.Refused -> when (e.refusal) {
         SaveBackup.Refusal.TOO_MANY_ENTRIES -> locale.str(R.string.save_pkg_too_many)

@@ -21,6 +21,8 @@ data class GameDetailUiState(
     val titleId: String? = null,
     val runOptions: RunOptionsSnapshot? = null,
     val runOptionsFailure: Throwable? = null,
+    /** The row named a driver that no longer exists; the app put the device driver back and owes a toast. */
+    val driverResetNotice: Boolean = false,
 )
 
 @HiltViewModel
@@ -48,7 +50,8 @@ class GameDetailViewModel @Inject constructor(
                 runCatching { runOptionsRepository.read(pack) }.fold(
                     onSuccess = { snapshot ->
                         if (mutableUiState.value.titleId == titleId) mutableUiState.value =
-                            mutableUiState.value.copy(runOptions = snapshot, runOptionsFailure = null)
+                            mutableUiState.value.copy(runOptions = snapshot, runOptionsFailure = null,
+                                driverResetNotice = snapshot.driverResetToSystem)
                     },
                     onFailure = { failure ->
                         if (failure is CancellationException) throw failure
@@ -58,6 +61,11 @@ class GameDetailViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /** The panel has shown the "switched to device driver" toast; do not repeat it on recomposition. */
+    fun acknowledgeDriverReset() {
+        mutableUiState.value = mutableUiState.value.copy(driverResetNotice = false)
     }
 
     fun selectLanguage(language: String?) = updateRunOptions(language, mutableUiState.value.runOptions?.driver)
@@ -72,7 +80,8 @@ class GameDetailViewModel @Inject constructor(
             runCatching { runOptionsRepository.update(pack, language, driver) }.fold(
                 onSuccess = { snapshot ->
                     if (mutableUiState.value.titleId == titleId) mutableUiState.value =
-                        mutableUiState.value.copy(runOptions = snapshot, runOptionsFailure = null)
+                        mutableUiState.value.copy(runOptions = snapshot, runOptionsFailure = null,
+                            driverResetNotice = snapshot.driverResetToSystem)
                 },
                 onFailure = { failure ->
                     if (failure is CancellationException) throw failure
