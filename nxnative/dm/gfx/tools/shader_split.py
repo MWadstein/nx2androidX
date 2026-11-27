@@ -2146,7 +2146,7 @@ def scan_file(args):
         except (ValueError, zlib.error) as e: red(f'{rel}: EA archive: {e}')
         return rel, uniq_keys(found), var_pairs(found), trees
     if LOOSE_MONO and ext in LOOSE_MONO and not (len(args) > 2):   # a loose Monolith file (.wishp, .wismt, .wismda …): HCPS archives in the file itself or in its xbc1 streams (mono_shaders)
-        mono_shaders(read_whole(path), '/' + rel, found)
+        monolith_shaders(read_whole(path), '/' + rel, found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if head[:4] == NLG_DICT:
         nlg_shaders(path, '/' + rel, found)
