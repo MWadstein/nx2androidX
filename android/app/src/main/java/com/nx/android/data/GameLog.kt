@@ -29,6 +29,23 @@ object GameLog {
     /** the log of the last runtime rebuild, or null when this pack never needed one */
     fun rebuildInPack(pack: File): File? = File(pack, REBUILD_FILE).takeIf { it.isFile }
 
+    /**
+     * The one-line reasons the host already wrote itself, from the last run's log: a crash marker
+     * (`[dm] CRASH sig=`, crash.c) or a Vulkan driver fallback (`[RED] DM_VK_DRIVER`, gfx_vk_core.c).
+     * Kept short — this is shown in a dialog, not a log viewer. Streaming stops at the first few hits.
+     */
+    fun reasonsInPack(pack: File): String = inPack(pack)?.useLines { lines ->
+        lines.filter { it.contains(CRASH_MARKER) || it.contains(DRIVER_MARKER) }
+            .take(3).toList()
+    }?.joinToString("\n")?.take(400) ?: ""
+
+    /** Whether the last run used the device's driver instead of the one its pack names */
+    fun driverFellBack(pack: File): Boolean =
+        inPack(pack)?.useLines { lines -> lines.any { it.contains(DRIVER_MARKER) } } ?: false
+
+    private const val CRASH_MARKER = "[dm] CRASH"
+    private const val DRIVER_MARKER = "[RED] DM_VK_DRIVER"
+
     /** the name the shared bundle carries: the game's own name, safe in a file name */
     fun shareName(game: String): String = "${SaveBackup.sanitize(game).ifEmpty { "game" }}-log.zip"
 

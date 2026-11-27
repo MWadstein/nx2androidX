@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -241,6 +242,9 @@ fun AppRoot(
     onAgentFull: (Boolean) -> Unit = {},
     crash: CrashReport? = null,
     onCrashHandled: () -> Unit = {},
+    /** The last game ran on the device driver, not the one its pack names: warn on the Library, not just in the log */
+    driverFallback: String? = null,
+    onDriverFallbackHandled: () -> Unit = {},
     /** 导出一局的攻关档案（库页选中的那局） */
     onExportGamespec: ((String) -> Unit)? = null,
 ) {
@@ -301,6 +305,8 @@ fun AppRoot(
                                 onEnvCheck = { envCheckOpen = true },
                         crash = crash,
                         onCrashHandled = onCrashHandled,
+                        driverFallback = driverFallback,
+                        onDriverFallbackHandled = onDriverFallbackHandled,
                         onExportGamespec = onExportGamespec,
                     )
                 }
@@ -518,6 +524,8 @@ fun MainScreen(
     onEnvCheck: () -> Unit,
     crash: CrashReport? = null,
     onCrashHandled: () -> Unit = {},
+    driverFallback: String? = null,
+    onDriverFallbackHandled: () -> Unit = {},
     /** 导出一局的攻关档案（库页选中的那局） */
     onExportGamespec: ((String) -> Unit)? = null,
 ) {
@@ -867,6 +875,22 @@ fun MainScreen(
                     openIssues(padCtx)
                 },
                 onClose = onCrashHandled,
+            )
+        }
+        // A named driver that could not load falls back to the device's driver with only a log line. Tell
+        // the player on the Library: they should not discover changed rendering by surprise in the game.
+        if (driverFallback != null) {
+            AlertDialog(
+                onDismissRequest = onDriverFallbackHandled,
+                modifier = Modifier.padding(horizontal = 16.dp).widthIn(max = 520.dp).fillMaxWidth(),
+                title = { Text(locale.str(R.string.driver_fallback_title), fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(locale.str(R.string.driver_fallback_text, driverFallback.orEmpty()),
+                        style = MaterialTheme.typography.bodyMedium)
+                },
+                confirmButton = {
+                    TextButton(onClick = onDriverFallbackHandled) { Text(locale.str(R.string.common_ok)) }
+                },
             )
         }
     }

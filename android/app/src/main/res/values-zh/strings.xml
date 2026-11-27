@@ -619,6 +619,9 @@
     <string name="crash_rebuild">重新构建</string>
     <string name="crash_port_again">重新移植</string>
     <string name="crash_report">反馈</string>
+    <string name="driver_not_loaded">这个游戏指定的驱动不在当前安装包里，正在使用设备自带驱动；画面或帧率可能与之前不同。</string>
+    <string name="driver_fallback_title">正在使用设备驱动</string>
+    <string name="driver_fallback_text">「%1$s」上次运行时没有加载数据包指定的驱动，而是用了设备自带驱动。画面或帧率可能已经变化，详情请查看游戏日志。</string>
     <string name="runtime_interrupted">运行库更新已中断。可重试，或在游戏详情里使用原始游戏文件重新移植；游戏数据会保留。</string>
 
     <!-- 手柄中心（实体手柄）：手柄中心面板与抽屉里的那一组 -->

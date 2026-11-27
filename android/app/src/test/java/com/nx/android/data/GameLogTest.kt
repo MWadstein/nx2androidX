@@ -1,6 +1,7 @@
 package com.nx.android.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -145,5 +146,35 @@ class GameLogTest {
         assertTrue(facts.contains("title id: 01001300232F4000"))
         assertTrue(facts.contains("version: 1.0.5"))
         assertTrue(facts.contains("profile status: playable"))
+    }
+
+    /** The host writes its own reasons into the log; the app surfaces them from there, not from a second flag. */
+    @Test
+    fun `driver fallback and crash markers are read from the last run's log`() {
+        val pack = Files.createTempDirectory("game-log")
+        try {
+            assertFalse(GameLog.driverFellBack(pack.toFile()))
+            assertEquals("", GameLog.reasonsInPack(pack.toFile()))
+
+            val log = pack.resolve(GameLog.FILE)
+            Files.write(log, listOf(
+                "Vulkan driver requested: Turnip",
+                "[RED] DM_VK_DRIVER libvulkan_freedreno.so: no libadrenotools in the APK; the system's driver instead",
+                "[dm] CRASH sig=11 addr=0x0 pc=libc.so+0x87ebc",
+            ).joinToString("\n").toByteArray())
+            assertTrue(GameLog.driverFellBack(pack.toFile()))
+            val reasons = GameLog.reasonsInPack(pack.toFile())
+            assertTrue(reasons.contains("[RED] DM_VK_DRIVER"))
+            assertTrue(reasons.contains("[dm] CRASH sig=11"))
+            assertFalse(reasons.contains("Vulkan driver requested"))
+
+            Files.delete(log)
+            Files.write(pack.resolve(GameLog.FILE), "clean run\n".toByteArray())
+            assertFalse(GameLog.driverFellBack(pack.toFile()))
+            assertEquals("", GameLog.reasonsInPack(pack.toFile()))
+        } finally {
+            Files.deleteIfExists(pack.resolve(GameLog.FILE))
+            Files.deleteIfExists(pack)
+        }
     }
 }
