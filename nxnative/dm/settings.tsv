@@ -140,6 +140,7 @@ DM_NVN_SKIP_FS	str		debug,ios	?	nvn_mtl.m
 DM_NVN_SKIP_SMALL	int		debug,ios	?	nvn_mtl.m	
 DM_NVN_SNAPRAW	str		debug,ios	?	nvn_mtl.m	Also save the raw bytes (converting an HDR target to an 8-bit image truncates; first-line text header: width height format bytes-per-row)
 DM_NVN_STORAGE_FIRST_USE	int		debug	?	gfx_vk_tex.c	
+DM_NVN_SUBPHASE	bool		debug	live	hle_nvn.c	log any synchronous submission over 40 ms with the time in its begin, free-list scan, index, replay, flush and commit phases (Xenoblade Chronicles 3 hitch investigation)
 DM_NVN_T2T_FROM	str		debug,ios	?	nvn_mtl.m	
 DM_NVN_T2T_TRACE	str		debug,ios	?	nvn_mtl.m	
 DM_NVN_TBDR	str		debug,ios	?	nvn_mtl.m	

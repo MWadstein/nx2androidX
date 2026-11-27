@@ -1474,13 +1474,18 @@ static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h) {
     // (the submit lock keeps it stable while the replay thread runs).
     mtl_set_queue_origin_lower_left(((const queue_t *)q)->origin_ll);
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
+    // DM_NVN_SUBPHASE (live) splits a slow synchronous submission into its host phases. Unlike slow replay
+    // profiling this also covers the fence wait, the free-list scan and the commit before/after the replay.
+    const char *spe = getenv("DM_NVN_SUBPHASE");
+    int subphase = spe && atoi(spe); uint64_t sp[7] = {t0};
     if (!nvn_async()) ((queue_t *)q)->submits++;
-    mtl_sub_begin(); ft_del_drain();
-    nvn_ft_poll();
-    mtl_sub_index((const uint64_t *)h, n);
+    mtl_sub_begin(); ft_del_drain(); if (subphase) sp[1] = now_ns();
+    nvn_ft_poll(); if (subphase) sp[2] = now_ns();
+    mtl_sub_index((const uint64_t *)h, n); if (subphase) sp[3] = now_ns();
     for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
-    mtl_exec_rest(NULL, 0);
-    mtl_sub_commit();
+    if (subphase) sp[4] = now_ns();
+    mtl_exec_rest(NULL, 0); if (subphase) sp[5] = now_ns();
+    mtl_sub_commit(); if (subphase) sp[6] = now_ns();
     pthread_mutex_unlock(&g_sub_mu);
     uint64_t dw = now_ns() - t0;
     atomic_fetch_add(&g_nvn_ns, dw); atomic_fetch_add(&g_sub_wall_ns, dw);
@@ -1489,6 +1494,12 @@ static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h) {
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
     gfx_leave();
+    if (subphase && dw > 40000000ull) {
+        double ms = 1e-6;
+        LOG("[nvn] slow submit f%llu: %.1f ms; begin %.1f, ft_poll %.1f, index %.1f, exec %.1f, rest %.1f, commit %.1f",
+            (unsigned long long)g_frame, dw * ms, (sp[1] - sp[0]) * ms, (sp[2] - sp[1]) * ms,
+            (sp[3] - sp[2]) * ms, (sp[4] - sp[3]) * ms, (sp[5] - sp[4]) * ms, (sp[6] - sp[5]) * ms);
+    }
 }
 
 // Commands that only affect GPU state / only execute on the GPU: the null device only counts them (the thunk has already counted)
