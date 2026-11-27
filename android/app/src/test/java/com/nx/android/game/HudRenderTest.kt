@@ -6,10 +6,14 @@ import com.nx.android.game.hud.HostSample
 import com.nx.android.game.hud.HudRole
 import com.nx.android.game.hud.HudSample
 import com.nx.android.game.hud.ThermalReadings
+import com.nx.android.game.hud.driverWarning
+import com.nx.android.game.hud.loaderPresent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 /** 性能 HUD 的算术与渲染：帧率的差分、帧时间、温度的分档与单位、充电时的功耗行 */
 class HudRenderTest {
@@ -160,5 +164,21 @@ class HudRenderTest {
         val fields = setOf(HudField.FPS, HudField.GPU, HudField.POWER)
         assertEquals(fields, HudField.of(HudField.keys(fields).split(",")))
         assertTrue(HudField.of(listOf("NOPE")).isEmpty())
+    }
+
+    @Test
+    fun `a named driver is marked as unloaded when the loader is missing`() {
+        val dir = Files.createTempDirectory("hud-loader")
+        try {
+            assertFalse(loaderPresent(dir.toFile().absolutePath))
+            assertFalse(loaderPresent(null))
+            assertEquals("Turnip (NOT LOADED: device driver)", driverWarning("Turnip", false))
+            Files.write(dir.resolve("libadrenotools.so"), byteArrayOf(1))
+            assertTrue(loaderPresent(dir.toFile().absolutePath))
+            assertEquals("Turnip", driverWarning("Turnip", true))
+        } finally {
+            Files.deleteIfExists(dir.resolve("libadrenotools.so"))
+            Files.deleteIfExists(dir)
+        }
     }
 }

@@ -104,5 +104,20 @@ rm -f "$root/android/app/build/outputs/apk/$variant/"*.apk
 cd "$root/android"
 ./gradlew ":app:assemble$("$py" -c "print('Debug' if '$variant' == 'debug' else 'Release')")" $payload_flag --console=plain
 apk=$(ls -t "$root/android/app/build/outputs/apk/$variant"/*.apk | head -1)
+
+# A build can finish "successfully" while Gradle skipped native libs — a worktree resolving the cache to a
+# folder that was never populated did exactly that. The host then dlopens no libadrenotools, silently runs
+# the device's driver, and the rendering loss looks like a game bug. Check the APK itself, not the cache:
+# the cache having the loader is not proof Gradle packaged it.
+echo ">> the Vulkan driver loader in the APK"
+"$py" - "$apk" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    names = set(z.namelist())
+for name in ('lib/arm64-v8a/libadrenotools.so',):
+    if name not in names:
+        sys.exit(f"android-apk: the APK is missing {name}: the named Vulkan driver would fall back to the device's")
+PY
+
 echo
 echo "APK: $apk ($(du -m "$apk" | cut -f1) MB)"

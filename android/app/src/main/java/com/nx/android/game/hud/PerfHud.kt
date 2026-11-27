@@ -164,9 +164,19 @@ private fun driverLabel(ctx: Context, packPath: String?): String? {
     val drv = runCatching { PackEnvStore.current(File(packPath)).second }.getOrNull()
     if (drv.isNullOrBlank()) return null   // the device's own driver
     val installed = runCatching { Drivers.list(ctx) }.getOrDefault(emptyList())
-    installed.firstOrNull { it.library.absolutePath == drv }?.let { return it.label }
-    return File(drv).name
+    val label = installed.firstOrNull { it.library.absolutePath == drv }?.label ?: File(drv).name
+    // The host dlopens the loader by name from the app's native library folder. Without it a named driver
+    // is silently ignored and the device's driver runs: do not advertise a driver the game is not using.
+    return driverWarning(label, loaderPresent(ctx.applicationInfo.nativeLibraryDir))
 }
+
+/** The host can load a named driver only when the loader sits in the app's native library folder */
+internal fun loaderPresent(nativeLibraryDir: String?): Boolean =
+    !nativeLibraryDir.isNullOrEmpty() && File(nativeLibraryDir, "libadrenotools.so").exists()
+
+/** Say plainly when the named driver will not be used, rather than showing a name the game cannot load */
+internal fun driverWarning(label: String, loaderPresent: Boolean): String =
+    if (loaderPresent) label else "$label (NOT LOADED: device driver)"
 
 /** The pill's palette: the app's own colors */
 private fun roleColor(role: HudRole): Color = when (role) {
