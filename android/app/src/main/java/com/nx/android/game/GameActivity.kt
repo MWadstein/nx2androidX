@@ -92,6 +92,7 @@ import com.nx.android.domain.RuntimeBuildMarker
 import com.nx.android.game.GameActivity.Companion.prepareScope
 import com.nx.android.game.hud.HudField
 import com.nx.android.game.hud.HudOverlay
+import com.nx.android.game.hud.loaderPresent
 import com.nx.android.game.input.PadEditor
 import com.nx.android.game.input.PadView
 import com.nx.android.agent.runtime.GamespecExporter
@@ -626,6 +627,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         // the default driver: a game whose driver was never picked runs on the app's built-in one (the row goes
         // into the pack's env.txt, which the host reads). A driver the player picked is left alone.
         applyDefaultDriver(File(pack))
+        // A named driver that is not in this build silently falls back to the device's driver (gfx_vk_core.c).
+        // Say so now: the opt-in HUD device line is easy to miss, and the log is too late to prevent surprise.
+        val namedDriver = runCatching { PackEnvStore.current(File(pack)).second }.getOrNull()
+        if (!namedDriver.isNullOrBlank() && !loaderPresent(applicationInfo.nativeLibraryDir)) {
+            toast(locale.str(R.string.driver_not_loaded))
+        }
         // the performance HUD's own preferences: the two lines, the fields, the temperature's unit
         val prefs = PrefsStore(this)
         hudStats = prefs.bool(PrefsStore.HUD_STATS, false)

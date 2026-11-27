@@ -620,6 +620,9 @@
     <string name="crash_rebuild">Rebuild</string>
     <string name="crash_port_again">Port again</string>
     <string name="crash_report">Report</string>
+    <string name="driver_not_loaded">The driver for this game is not in this build. The device driver is being used instead; rendering or frame rate may differ.</string>
+    <string name="driver_fallback_title">Device driver in use</string>
+    <string name="driver_fallback_text">%1$s last ran on the device\'s driver, not the one its pack names. The driver could not be loaded — rendering or frame rate may have changed. Check the game\'s log for details.</string>
     <string name="runtime_interrupted">The runtime update was interrupted. Retry, or port the game again from its original files in the game\'s details. Your game data is kept.</string>
 
     <!-- 手柄中心（实体手柄）：手柄中心面板与抽屉里的那一组 -->

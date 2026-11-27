@@ -55,6 +55,7 @@ import com.nx.android.data.AppLocale
 import com.nx.android.data.AppLog
 import com.nx.android.data.AppVersion
 import com.nx.android.data.CheatRepo
+import com.nx.android.data.GameLog
 import com.nx.android.data.Gamespec
 import com.nx.android.data.LogBundle
 import com.nx.android.data.Player
@@ -166,6 +167,9 @@ class MainActivity : ComponentActivity() {
     /** 上一次那个游戏闪退了：弹框把那三条路摆出来（重新构建 / 重新移植 / 反馈） */
     private var crash by mutableStateOf<CrashReport?>(null)
 
+    /** The last game ran on the device driver instead of the one its pack names: tell the player, not just the log */
+    private var driverFallback by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 全屏沉浸：内容铺满整块屏幕，系统栏隐藏（下滑临时呼出）
@@ -199,6 +203,7 @@ class MainActivity : ComponentActivity() {
                 padCenterOpen = padCenterOpen, onPadCenter = { padCenterOpen = it },
                 agentFullOpen = agentFullOpen, onAgentFull = { agentFullOpen = it },
                 crash = crash, onCrashHandled = { crash = null },
+                driverFallback = driverFallback, onDriverFallbackHandled = { driverFallback = null },
                 onExportGamespec = { titleId -> exportGamespec(titleId) })
         }
         // The chat page is portrait: while it is open the screen turns; closed, the sensor landscape lock
@@ -497,10 +502,15 @@ class MainActivity : ComponentActivity() {
                             isCrash(it.reason, it.status)
                     }
                 }.getOrDefault(emptyList())
+                val packDir = library.games.firstOrNull {
+                    it.titleId.equals(player.currentTitleId(), ignoreCase = true)
+                }?.pack?.pack
                 if (exits.isNotEmpty()) {
                     prefs.put(PrefsStore.PLAYER_LAST_START, null)
                     // 闪退的不是 toast 能说清的：弹框把三条路摆出来——重新构建、重新移植、反馈
-                    crash = CrashReport(player.currentTitleId(), player.currentName())
+                    // The host's own crash/fallback line goes in too: the full backtrace stays in the log.
+                    crash = CrashReport(player.currentTitleId(), player.currentName(),
+                        packDir?.let(GameLog::reasonsInPack).orEmpty())
                     // 这局的档案记一笔：出事时只有 app 在场，玩家的「它又崩了」得有地方落
                     Gamespec.appendEvent(
                         paths.nxHome,
@@ -508,6 +518,14 @@ class MainActivity : ComponentActivity() {
                         Gamespec.EXIT,
                         "process exited abnormally (${exits.first().reason})",
                     )
+                } else if (packDir?.let(GameLog::driverFellBack) == true) {
+                    // The host falls back to the device driver without an on-screen error; its log line is the
+                    // only trace. Tell the player now rather than let them find broken rendering by surprise.
+                    prefs.put(PrefsStore.PLAYER_LAST_START, null)
+                    driverFallback = player.currentName()
+                } else {
+                    // A normal exit: the marker has done its job for this launch.
+                    prefs.put(PrefsStore.PLAYER_LAST_START, null)
                 }
             }
         }
