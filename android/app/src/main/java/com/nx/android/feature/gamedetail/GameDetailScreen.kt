@@ -166,7 +166,8 @@ fun GameDetailRoute(lib: LibraryState, port: PortState,
         onDispose { viewModel.close(e.titleId) }
     }
     GameDetailScreen(lib, port, e, installedDrivers, viewModel.saveRepository, viewModel.saveIo,
-        uiState, viewModel::selectLanguage, viewModel::selectDriver, actions, onGoBuilds, onRequest, onClose,
+        uiState, viewModel::selectLanguage, viewModel::selectDriver, viewModel::acknowledgeDriverReset,
+        actions, onGoBuilds, onRequest, onClose,
         navActive = navActive, onOpenAgent = onOpenAgent, agentVisible = agentVisible)
 }
 
@@ -175,6 +176,7 @@ private fun GameDetailScreen(lib: LibraryState, port: PortState,
                         e: GameEntry, installedDrivers: List<Driver>, saveRepository: SaveRepository,
                         saveIo: SaveIo, detailState: GameDetailUiState,
                         onSelectLanguage: (String?) -> Unit, onSelectDriver: (String?) -> Unit,
+                        onDriverResetConsumed: () -> Unit,
                         actions: AppActions, onGoBuilds: () -> Unit,
                         onRequest: (PickerRequest) -> Unit, onClose: () -> Unit,
                         navActive: Boolean = false, onOpenAgent: () -> Unit = {},
@@ -581,7 +583,8 @@ private fun GameDetailScreen(lib: LibraryState, port: PortState,
                         Hint(locale.str(R.string.builds_artifact_path, ported.pack.absolutePath), size = 11.sp)
                         Spacer(Modifier.height(8.dp))
                         RunOptions(installedDrivers, detailState.runOptions,
-                            detailState.runOptionsFailure, onSelectLanguage, onSelectDriver)
+                            detailState.runOptionsFailure, onSelectLanguage, onSelectDriver,
+                            detailState.driverResetNotice, onDriverResetConsumed, actions.onToast)
                         Spacer(Modifier.height(10.dp))
                         SaveRows(ported, e.label, saveRepository, saveIo, actions.onToast)
                         Spacer(Modifier.height(6.dp))
@@ -875,8 +878,18 @@ private fun RunOptions(
     failure: Throwable?,
     onSelectLanguage: (String?) -> Unit,
     onSelectDriver: (String?) -> Unit,
+    driverResetNotice: Boolean = false,
+    onDriverResetConsumed: () -> Unit = {},
+    onToast: (String) -> Unit = {},
 ) {
     val systemDriver = stringResource(R.string.driver_system_default)
+    val resetMessage = stringResource(R.string.driver_reset_to_system)
+    LaunchedEffect(driverResetNotice) {
+        if (driverResetNotice) {
+            onToast(resetMessage)
+            onDriverResetConsumed()
+        }
+    }
     if (options != null) {
         PickRow(stringResource(R.string.lib_section_language), options.languages, options.language,
             onSelect = onSelectLanguage, fallback = systemDriver)

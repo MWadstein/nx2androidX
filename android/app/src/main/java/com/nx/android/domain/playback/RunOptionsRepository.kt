@@ -7,6 +7,8 @@ data class RunOptionsSnapshot(
     val packDrivers: List<String> = emptyList(),
     val language: String? = null,
     val driver: String? = null,
+    /** The row named a driver that is gone, so the app put the device's own driver back. */
+    val driverResetToSystem: Boolean = false,
 ) {
     fun driverChoices(installed: List<Pair<String, String>>): List<Pair<String, String?>> =
         listOf("" to null) + installed + packDrivers.map { it to it }

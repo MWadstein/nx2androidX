@@ -46,7 +46,8 @@ object DriverCatalog {
      * 下载一个驱动并装好。进度从 0 到 1。下载写进 cache 里的 .part 文件，装好了才算数——
      * 装坏了不会在 App 的目录里留下半个驱动。
      */
-    suspend fun download(context: Context, release: DriverRelease, onProgress: (Float) -> Unit): Result<Driver> =
+    suspend fun download(context: Context, release: DriverRelease, onProgress: (Float) -> Unit,
+                         abis: Array<String> = emptyArray()): Result<Driver> =
         withContext(Dispatchers.IO) {
             val tmp = File(File(context.cacheDir, "driver_download"), release.file + ".part")
             runCatching {
@@ -75,7 +76,7 @@ object DriverCatalog {
                 } finally {
                     conn.disconnect()
                 }
-                tmp.inputStream().use { Drivers.install(context, it).getOrThrow() }
+                tmp.inputStream().use { Drivers.install(context, it, abis).getOrThrow() }
             }.also { tmp.delete() }
         }
 }

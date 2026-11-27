@@ -228,6 +228,9 @@
     <string name="driver_refused_no_driver">这个压缩包里没有驱动</string>
     <string name="driver_refused_no_library">这个压缩包里没有驱动库</string>
     <string name="driver_refused_not_a_driver">这不是驱动（要一个 zip 压缩包或一个 .so 驱动库）</string>
+    <string name="driver_refused_bad_elf">这个驱动库不是可用的 Android 动态库</string>
+    <string name="driver_refused_wrong_abi">这个驱动库是为其他 CPU 编译的，不能在本机使用</string>
+    <string name="driver_reset_to_system">这个驱动已经不可用了，已切换回设备自带驱动。需要自定义驱动请重新选择。</string>
     <string name="save_pkg_too_many">包里条目太多</string>
     <string name="save_pkg_bad_path">包里的路径不对：%1$s</string>
     <string name="save_pkg_escapes">包里的路径越界：%1$s</string>

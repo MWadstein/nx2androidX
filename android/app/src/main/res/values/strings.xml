@@ -229,6 +229,9 @@
     <string name="driver_refused_no_driver">This archive holds no driver</string>
     <string name="driver_refused_no_library">This archive holds no driver library</string>
     <string name="driver_refused_not_a_driver">This is not a driver (a zip archive or a .so driver library)</string>
+    <string name="driver_refused_bad_elf">This driver library is not a usable Android shared object</string>
+    <string name="driver_refused_wrong_abi">This driver library is built for a different CPU than this device</string>
+    <string name="driver_reset_to_system">That driver is no longer available. Switched to the device driver; pick another one if you want a custom driver.</string>
     <string name="save_pkg_too_many">The package holds too many entries</string>
     <string name="save_pkg_bad_path">The package holds a path that is not right: %1$s</string>
     <string name="save_pkg_escapes">The package holds a path that points outside: %1$s</string>

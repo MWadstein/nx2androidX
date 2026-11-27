@@ -30,8 +30,11 @@ class RunOptionsRepositoryImpl @Inject constructor(
 
     override suspend fun update(pack: File, language: String?, driver: String?): RunOptionsSnapshot = withContext(io) {
         lock(pack).withLock {
-            PackEnvStore.set(pack, language, driver)
-            snapshot(pack)
+            // A driver that is no longer installed must not be written into env.txt: the host would fall back
+            // to the device driver with only a log line. Put the device's own driver in the row and say so.
+            val invalid = !driver.isNullOrEmpty() && !driverAvailable(pack, driver)
+            PackEnvStore.set(pack, language, if (invalid) "" else driver)
+            snapshot(pack).copy(driverResetToSystem = invalid)
         }
     }
 
@@ -45,13 +48,27 @@ class RunOptionsRepositoryImpl @Inject constructor(
     private suspend fun snapshot(pack: File): RunOptionsSnapshot {
         applyDefaultDriver(pack)
         val current = PackEnvStore.current(pack)
+        val stale = !current.second.isNullOrEmpty() && !driverAvailable(pack, current.second!!)
+        if (stale) PackEnvStore.set(pack, current.first, "")   // a deleted driver's path must not survive
         return RunOptionsSnapshot(
             languages = PackEnvStore.languages(pack),
             packDrivers = PackEnvStore.drivers(pack),
             language = current.first,
-            driver = current.second,
+            driver = if (stale) "" else current.second,
+            driverResetToSystem = stale,
         )
     }
+
+    /**
+     * The row is either a bare name the pack carries, or an absolute path of one of the app's installed
+     * drivers. Anything else would silently fall back at launch; refuse it at the point of selection.
+     */
+    private fun driverAvailable(pack: File, value: String): Boolean =
+        if (File(value).isAbsolute || value.contains('/') || value.contains('\\')) driverRepository.drivers.value.any { installed ->
+            installed.library.absolutePath == value ||
+                runCatching { installed.library.canonicalPath == File(value).canonicalPath }.getOrDefault(false)
+        }
+        else PackEnvStore.drivers(pack).contains(value)
 
     private suspend fun applyDefaultDriver(pack: File) {
         if (PackEnvStore.current(pack).second != null) return

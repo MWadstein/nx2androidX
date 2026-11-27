@@ -60,6 +60,28 @@ class DriversTest {
     }
 
     @Test
+    fun `an ELF for this device is accepted but a wrong-ABI or fake library is refused`() {
+        val arm64 = arrayOf("arm64-v8a")
+        val good = elf("libvulkan_freedreno.so", cls = 2, machine = 183)
+        val otherCpu = elf("libvulkan_freedreno.so", cls = 2, machine = 62)
+        val notElf = File.createTempFile("nx2a-no-elf", ".so").apply { writeText("not a driver") }
+        val wrongName = elf("libvulkan_freedreno.txt", cls = 2, machine = 183)
+        try {
+            assertNull(Drivers.validateLibrary(good, arm64))
+            assertEquals(Drivers.Refusal.WRONG_ABI, Drivers.validateLibrary(otherCpu, arm64))
+            assertEquals(Drivers.Refusal.BAD_ELF, Drivers.validateLibrary(notElf, arm64))
+            assertEquals(Drivers.Refusal.NOT_A_DRIVER, Drivers.validateLibrary(wrongName, arm64))
+            // with no ABI list (JVM tests that write placeholder libraries) the machine check is skipped
+            assertNull(Drivers.validateLibrary(otherCpu, emptyArray()))
+        } finally {
+            good.parentFile?.deleteRecursively()
+            otherCpu.parentFile?.deleteRecursively()
+            wrongName.parentFile?.deleteRecursively()
+            notElf.delete()
+        }
+    }
+
+    @Test
     fun `an archive without a driver is refused`() {
         val stage = File.createTempFile("nx2a-driver", "").let { it.delete(); it.mkdirs(); it }
         try {
@@ -68,6 +90,18 @@ class DriversTest {
         } finally {
             stage.deleteRecursively()
         }
+    }
+
+    /** A file with a real ELF header (and enough bytes to be more than a placeholder). */
+    private fun elf(name: String, cls: Int, machine: Int): File {
+        val dir = java.nio.file.Files.createTempDirectory("nx2a-elf").toFile()
+        val f = File(dir, name)
+        val head = ByteArray(20)
+        head[0] = 0x7F.toByte(); head[1] = 'E'.code.toByte(); head[2] = 'L'.code.toByte(); head[3] = 'F'.code.toByte()
+        head[4] = cls.toByte(); head[5] = 1
+        head[18] = (machine and 0xFF).toByte(); head[19] = (machine shr 8).toByte()
+        java.io.RandomAccessFile(f, "rw").use { it.write(head); it.setLength(8192) }
+        return f
     }
 
     private fun archive(vararg entries: Pair<String, String>): ByteArray {

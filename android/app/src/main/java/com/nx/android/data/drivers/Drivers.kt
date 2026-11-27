@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.RandomAccessFile
 import java.util.zip.ZipInputStream
 
 /**
@@ -28,7 +29,7 @@ object Drivers {
      * Why a driver was refused. A code, not a sentence: the words for it live in the app's own resources
      * (see `ui/Failures.kt`).
      */
-    enum class Refusal { NO_DRIVER, NO_LIBRARY, NOT_A_DRIVER }
+    enum class Refusal { NO_DRIVER, NO_LIBRARY, NOT_A_DRIVER, BAD_ELF, WRONG_ABI }
 
     /** A driver that was refused: the reason. */
     class Refused(val refusal: Refusal) : IOException(refusal.name)
@@ -54,6 +55,41 @@ object Drivers {
 
     /** 驱动自己的名字变一个文件夹名 */
     fun idOf(name: String) = name.trim().replace(Regex("[^A-Za-z0-9._-]+"), "_")
+
+    /**
+     * A cheap, pure check of a driver library before it becomes selectable: is it really an ELF shared
+     * object for this device? This cannot prove the host can load it (that needs a real dlopen in the
+     * game process), but it stops a random .so or a driver built for the wrong CPU from getting in.
+     * An empty ABI list skips the machine check — used by JVM tests that write placeholder libraries.
+     */
+    fun validateLibrary(file: File, abis: Array<String>): Refusal? {
+        if (!file.isFile) return Refusal.NO_LIBRARY
+        if (!file.name.endsWith(".so", ignoreCase = true)) return Refusal.NOT_A_DRIVER
+        if (file.length() < MIN_LIBRARY_BYTES) return Refusal.BAD_ELF
+        val head = ByteArray(20)
+        try { RandomAccessFile(file, "r").use { it.readFully(head) } }
+        catch (e: IOException) { return Refusal.BAD_ELF }
+        if (head[0] != 0x7F.toByte() || head[1] != 'E'.code.toByte() || head[2] != 'L'.code.toByte() ||
+            head[3] != 'F'.code.toByte() || head[5] != 1.toByte()) return Refusal.BAD_ELF
+        val wanted = abis.map(::abiShape).filter { it.first != 0 }
+        if (wanted.isNotEmpty()) {
+            val elfClass = head[4].toInt() and 0xFF
+            val machine = (head[18].toInt() and 0xFF) or ((head[19].toInt() and 0xFF) shl 8)
+            if (wanted.none { it.first == elfClass && it.second == machine }) return Refusal.WRONG_ABI
+        }
+        return null
+    }
+
+    /** ELF class (1 = 32-bit, 2 = 64-bit) and e_machine for the ABIs Android can run here. */
+    private fun abiShape(abi: String): Pair<Int, Int> = when (abi) {
+        "arm64-v8a" -> 2 to 183
+        "armeabi-v7a", "armeabi" -> 1 to 40
+        "x86_64" -> 2 to 62
+        "x86" -> 1 to 3
+        else -> 0 to 0
+    }
+
+    private const val MIN_LIBRARY_BYTES = 4096L
 
     /** 装好的驱动，按它们的名字排 */
     fun list(context: Context): List<Driver> =
@@ -95,9 +131,10 @@ object Drivers {
     /**
      * 装一个驱动（从一个 zip 流）：库和元数据写进驱动自己的文件夹，同名的旧版本被换掉。
      */
-    fun install(context: Context, archive: InputStream): Result<Driver> = runCatching {
+    fun install(context: Context, archive: InputStream, abis: Array<String> = emptyArray()): Result<Driver> = runCatching {
         val stage = File(root(context), ".install").apply { deleteRecursively() }
         val m = unpack(archive, stage)
+        validateLibrary(File(stage, m.library), abis)?.let { throw Refused(it) }
         val id = idOf(m.name)
         val dst = File(root(context), id)
         dst.deleteRecursively()
@@ -133,17 +170,18 @@ object Drivers {
      * 装一个玩家挑的文件：一个驱动压缩包（AdrenoTools 的那个格式），或者一个驱动库本身。
      * 挑到别的东西就说装不了。
      */
-    fun install(context: Context, file: File): Result<Driver> {
+    fun install(context: Context, file: File, abis: Array<String> = emptyArray()): Result<Driver> {
         val name = file.name.lowercase()
         return when {
-            name.endsWith(".zip") -> runCatching { file.inputStream().use { install(context, it).getOrThrow() } }
-            name.endsWith(".so") -> installLibrary(context, file)
+            name.endsWith(".zip") -> runCatching { file.inputStream().use { install(context, it, abis).getOrThrow() } }
+            name.endsWith(".so") -> installLibrary(context, file, abis)
             else -> Result.failure(Refused(Refusal.NOT_A_DRIVER))
         }
     }
 
     /** 装一个没有元数据的驱动库：库放进去，元数据自己写一份 */
-    private fun installLibrary(context: Context, file: File): Result<Driver> = runCatching {
+    private fun installLibrary(context: Context, file: File, abis: Array<String>): Result<Driver> = runCatching {
+        validateLibrary(file, abis)?.let { throw Refused(it) }
         val name = file.name.removeSuffix(".so")
         val dir = File(root(context), idOf(name)).apply { deleteRecursively(); mkdirs() }
         file.copyTo(File(dir, file.name), overwrite = true)
