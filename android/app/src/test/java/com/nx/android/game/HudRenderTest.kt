@@ -5,6 +5,7 @@ import com.nx.android.game.hud.HudField
 import com.nx.android.game.hud.HostSample
 import com.nx.android.game.hud.HudRole
 import com.nx.android.game.hud.HudSample
+import com.nx.android.game.hud.ThermalReadings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -107,6 +108,35 @@ class HudRenderTest {
         val sample = HudSample(tempC = 40f)
         assertEquals("40.0°C", HudData.render(sample, setOf(HudField.TEMP))[0].text)
         assertEquals("104.0°F", HudData.render(sample, setOf(HudField.TEMP), fahrenheit = true)[0].text)
+    }
+
+    @Test
+    fun `only the temperature beside a usage reading is color graded`() {
+        val sample = HudSample(cpuPercent = 42f, cpuTempC = 95f, gpuPercent = 64f, gpuTempC = 61f)
+        val lines = HudData.render(sample, setOf(HudField.CPU, HudField.GPU))
+        assertEquals(listOf("CPU 42% 95.0°C", "GPU 64% 61.0°C"), lines.map { it.text })
+        assertEquals(HudRole.PLAIN, lines[0].parts!![0].role)    // the percentage stays neutral
+        assertEquals(HudRole.BAD, lines[0].parts!![1].role)     // only the hot CPU reading is red
+        assertEquals(HudRole.PLAIN, lines[1].parts!![0].role)
+        assertEquals(HudRole.GOOD, lines[1].parts!![1].role)
+        val fahrenheit = HudData.render(sample, setOf(HudField.CPU), fahrenheit = true)
+        assertEquals("CPU 42% 203.0°F", fahrenheit[0].text)
+    }
+
+    @Test
+    fun `thermal zones are selected and normalized without Android`() {
+        assertEquals(36.9f, ThermalReadings.normalizeC(36900f)!!, 0.01f)
+        assertEquals(36.9f, ThermalReadings.normalizeC(369f)!!, 0.01f)
+        assertEquals(36f, ThermalReadings.normalizeC(36f)!!, 0.01f)
+        assertNull(ThermalReadings.normalizeC(0f))
+        val zones = sequenceOf(
+            "cpu-1-0-0" to 101000f, "cpuss-1-0" to 81000f,
+            "pmih010x_lite_tz" to 47000f, "gpuss-0" to 61000f,
+        )
+        assertEquals(101f, ThermalReadings.hottest(zones, ThermalReadings::isCpuZone)!!, 0.01f)
+        assertEquals(61f, ThermalReadings.hottest(
+            sequenceOf("cpu-1-0-0" to 101000f, "gpuss-0" to 61000f), ThermalReadings::isGpuZone,
+        )!!, 0.01f)
     }
 
     @Test

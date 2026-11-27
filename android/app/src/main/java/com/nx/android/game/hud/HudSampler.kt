@@ -20,6 +20,7 @@ object HudSampler {
 
     private const val SYS_CPU = "/sys/devices/system/cpu"
     private const val KGSL = "/sys/class/kgsl/kgsl-3d0"
+    private const val THERMAL = "/sys/class/thermal"
     /** How long a stale GPU busy window is held before it reads as idle */
     private const val GPU_HOLD_MS = 5_000L
     /** Android's kernel ticks a second 100 times (USER_HZ) */
@@ -35,15 +36,20 @@ object HudSampler {
     private var coreCount = 0
     private var gpuLatched = 0f
     private var gpuWindowAt = 0L
+    // the thermal zone list is discovered once: a tick reads only the temp files, not the whole sysfs tree
+    private var thermalCache: Pair<List<ThermalZone>, List<ThermalZone>>? = null
 
     /** One tick: the readings of the selected fields */
     fun take(ctx: Context, fields: Set<HudField>): HudSample {
         if (HudField.CPU !in fields) resetCpu()
         if (HudField.GPU !in fields) gpuWindowAt = 0L
         val battery = if (HudField.POWER in fields || HudField.TEMP in fields) battery(ctx, HudField.POWER in fields) else null
+        val thermal = if (HudField.CPU in fields || HudField.GPU in fields) thermalZones() else null
         return HudSample(
             cpuPercent = if (HudField.CPU in fields) cpuPercent() else null,
             gpuPercent = if (HudField.GPU in fields) gpuBusy() else null,
+            cpuTempC = if (HudField.CPU in fields) thermal?.first?.let(::hottest) else null,
+            gpuTempC = if (HudField.GPU in fields) thermal?.second?.let(::hottest) else null,
             appRamMb = if (HudField.APP_RAM in fields) appRamMb() else null,
             sysRamUsedMb = if (HudField.SYS_RAM in fields) sysRamUsedMb() else null,
             sysRamTotalMb = if (HudField.SYS_RAM in fields) sysRamTotalMb() else null,
@@ -190,6 +196,38 @@ object HudSampler {
     }.getOrNull()
 
     /**
+     * The thermal zones that name a CPU or GPU sensor. The list is discovered once: a tick only reads the few
+     * `temp` files, with no directory walk, so the HUD's cost stays the same as its other readings.
+     */
+    private fun thermalZones(): Pair<List<ThermalZone>, List<ThermalZone>> {
+        thermalCache?.let { return it }
+        val root = File(THERMAL)
+        val cpu = mutableListOf<ThermalZone>()
+        val gpu = mutableListOf<ThermalZone>()
+        for (name in root.list().orEmpty()) {
+            if (!name.startsWith("thermal_zone")) continue
+            val dir = File(root, name)
+            val type = runCatching { File(dir, "type").readText().trim() }.getOrNull() ?: continue
+            val temp = File(dir, "temp")
+            if (!temp.exists()) continue
+            val zone = ThermalZone(type, temp)
+            if (ThermalReadings.isCpuZone(type)) cpu += zone
+            else if (ThermalReadings.isGpuZone(type)) gpu += zone
+        }
+        val found = cpu to gpu
+        thermalCache = found
+        return found
+    }
+
+    /** The hottest valid zone of one kind. A driver that hides its sensors simply leaves the HUD blank. */
+    private fun hottest(zones: List<ThermalZone>): Float? = ThermalReadings.hottest(
+        zones.asSequence().map { z ->
+            val raw = runCatching { z.temp.readText().trim().toFloatOrNull() }.getOrNull() ?: Float.NaN
+            z.name to raw
+        },
+    ) { true }
+
+    /**
      * The battery's readings: the temperature and the voltage from the sticky battery intent, the current from
      * the battery service with a unit auto-detect — the vendors split between reporting milliamps and
      * microamps, and the magnitude tells which. Watts = volts × amps, magnitude only (the sign conventions
@@ -218,4 +256,7 @@ object HudSampler {
 
     /** One battery sample. A named class, not a Triple: the fields were swapped once. */
     private class BatteryReading(val watts: Float?, val charging: Boolean, val tempC: Float?, val capacity: Int?)
+
+    /** One thermal sensor: its kernel name, discovered once, and the file read on each tick */
+    private data class ThermalZone(val name: String, val temp: File)
 }

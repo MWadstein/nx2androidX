@@ -25,8 +25,11 @@ enum class HudField(val key: String) {
 /** The color a line is drawn with: the pill's palette (the app's own colors are mapped onto it in the view) */
 enum class HudRole { PLAIN, ACCENT, GOOD, WARN, BAD }
 
-/** One line of the HUD: the reading and the color role it wears */
-data class HudLine(val text: String, val role: HudRole)
+/** One piece of a line, with its own color: the usage stays neutral while the temperature is graded */
+data class HudTextPart(val text: String, val role: HudRole)
+
+/** One line of the HUD: the reading and its fallback color; parts override it when present */
+data class HudLine(val text: String, val role: HudRole, val parts: List<HudTextPart>? = null)
 
 /**
  * One tick's readings. A null field is one the device does not offer (or one that was not sampled): the HUD
@@ -39,6 +42,8 @@ data class HudSample(
     val fgState: Int? = null,
     val cpuPercent: Float? = null,
     val gpuPercent: Float? = null,
+    val cpuTempC: Float? = null,
+    val gpuTempC: Float? = null,
     val appRamMb: Long? = null,
     val sysRamUsedMb: Long? = null,
     val sysRamTotalMb: Long? = null,
@@ -65,6 +70,12 @@ object HudData {
     /** The battery's warning and bad marks, in Celsius (the battery runs far cooler than the SoC) */
     const val TEMP_WARN_C = 42f
     const val TEMP_BAD_C = 47f
+
+    /** The SoC's warning and bad marks: a hot phone is normal, a throttling one is not */
+    const val CPU_TEMP_WARN_C = 80f
+    const val CPU_TEMP_BAD_C = 95f
+    const val GPU_TEMP_WARN_C = 75f
+    const val GPU_TEMP_BAD_C = 90f
 
     /** What a field reads when the device does not offer it */
     const val PLACEHOLDER = "—"
@@ -133,8 +144,10 @@ object HudData {
                     HudLine(text, HudRole.ACCENT)
                 }
                 HudField.FRAME_TIME -> if (fgOn) null else HudLine(s.frameMs?.let { num("%.1f ms", it) } ?: PLACEHOLDER, HudRole.PLAIN)
-                HudField.CPU -> HudLine(s.cpuPercent?.let { num("CPU %.0f%%", it) } ?: "CPU $PLACEHOLDER", HudRole.PLAIN)
-                HudField.GPU -> HudLine(s.gpuPercent?.let { num("GPU %.0f%%", it) } ?: "GPU $PLACEHOLDER", HudRole.PLAIN)
+                HudField.CPU -> usageWithTemp("CPU", s.cpuPercent, s.cpuTempC, fahrenheit,
+                    tempRole(s.cpuTempC, CPU_TEMP_WARN_C, CPU_TEMP_BAD_C))
+                HudField.GPU -> usageWithTemp("GPU", s.gpuPercent, s.gpuTempC, fahrenheit,
+                    tempRole(s.gpuTempC, GPU_TEMP_WARN_C, GPU_TEMP_BAD_C))
                 HudField.APP_RAM -> HudLine(s.appRamMb?.let { num("RAM %d MB", it) } ?: "RAM $PLACEHOLDER", HudRole.PLAIN)
                 HudField.SYS_RAM -> HudLine(
                     if (s.sysRamUsedMb != null && s.sysRamTotalMb != null)
@@ -160,14 +173,59 @@ object HudData {
         }.filterNotNull()
     }
 
+    /** One HUD line: usage stays neutral, only the temperature beside it carries the warning color */
+    private fun usageWithTemp(
+        label: String, percent: Float?, tempC: Float?, fahrenheit: Boolean, tempRole: HudRole,
+    ): HudLine {
+        val parts = mutableListOf(HudTextPart(
+            "$label ${percent?.let { num("%.0f%%", it) } ?: PLACEHOLDER}", HudRole.PLAIN,
+        ))
+        tempC?.let {
+            val text = if (fahrenheit) num(" %.1f°F", it * 9.0 / 5.0 + 32.0) else num(" %.1f°C", it)
+            parts += HudTextPart(text, tempRole)
+        }
+        return HudLine(parts.joinToString("") { it.text }, HudRole.PLAIN, parts)
+    }
+
     /** A number in the app's own format: the decimal point is a point, whatever the phone's language is */
     private fun num(format: String, vararg values: Any): String = String.format(Locale.ROOT, format, *values)
 
     /** The temperature's color: good below the warning mark, warning to the bad mark, bad above it (in Celsius) */
-    fun tempRole(c: Float?): HudRole = when {
+    fun tempRole(c: Float?): HudRole = tempRole(c, TEMP_WARN_C, TEMP_BAD_C)
+
+    /** The same grading with a caller's marks — the SoC runs far hotter than the battery */
+    fun tempRole(c: Float?, warnC: Float, badC: Float): HudRole = when {
         c == null -> HudRole.PLAIN
-        c >= TEMP_BAD_C -> HudRole.BAD
-        c >= TEMP_WARN_C -> HudRole.WARN
+        c >= badC -> HudRole.BAD
+        c >= warnC -> HudRole.WARN
         else -> HudRole.GOOD
     }
+}
+
+/**
+ * The pure part of the thermal-zone reader: which zones belong to the CPU/GPU, unit normalization, and the
+ * hottest valid reading. HudSampler does the file reads; this object keeps the selection testable without Android.
+ */
+object ThermalReadings {
+    fun isCpuZone(type: String): Boolean =
+        type.startsWith("cpu-") || type.startsWith("cpuss-")
+
+    fun isGpuZone(type: String): Boolean = type.startsWith("gpuss-")
+
+    /** Kernel zones report milli-°C, tenths of °C or whole °C depending on the driver */
+    fun normalizeC(raw: Float): Float? {
+        if (!raw.isFinite() || raw <= 0f) return null
+        val c = when {
+            raw >= 1000f -> raw / 1000f
+            raw >= 100f -> raw / 10f
+            else -> raw
+        }
+        return c.takeIf { it in 1f..150f }
+    }
+
+    /** The hottest valid reading of the matching zones — the number a thermal throttle is judged by */
+    fun hottest(zones: Sequence<Pair<String, Float>>, keep: (String) -> Boolean): Float? =
+        zones.filter { keep(it.first) }
+            .mapNotNull { normalizeC(it.second) }
+            .maxOrNull()
 }

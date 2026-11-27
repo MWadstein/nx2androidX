@@ -109,9 +109,19 @@ private fun PerfHud(
         horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        lines.forEach {
-            Text(it.text, color = roleColor(it.role), textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+        lines.forEach { line ->
+            val parts = line.parts
+            if (parts == null) {
+                Text(line.text, color = roleColor(line.role), textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically) {
+                    parts.forEach { part ->
+                        Text(part.text, color = roleColor(part.role), textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
         }
     }
 }
