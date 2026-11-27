@@ -10,16 +10,26 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-// The payload (the environment in one archive, the driver) is built by packaging/android-apk/build_assets.py and
-// staged outside the source tree: it is a few hundred megabytes and not committed. The working tree the build
-// stages the tool's tree in is .cache/assets; what goes into the APK is .cache/apk-assets.
-val assetsDir = rootProject.layout.projectDirectory.dir("../packaging/android-apk/.cache/apk-assets")
+// Both the payload and the Vulkan driver loader are staged outside the source tree: they are large and not
+// committed. build_apk.sh writes them to the cache it is given (NX2A_CACHE), which is shared by every worktree
+// of a checkout. A path relative to the Gradle root would land in a worktree's own .cache instead — never
+// populated by the build — so the APK would silently miss libadrenotools.so and the custom Vulkan driver would
+// fail to load. Read the same cache the script wrote to; the checkout-local path stays the default for a plain
+// Gradle invocation.
+val cacheRoot = System.getenv("NX2A_CACHE")?.takeIf { it.isNotBlank() }
+fun cachedDir(name: String) = rootProject.layout.projectDirectory.dir(
+    cacheRoot?.let { "$it/$name" } ?: "../packaging/android-apk/.cache/$name"
+)
 
-// The Vulkan driver loader (libadrenotools.so), built by packaging/android-apk/build_adrenotools.py and staged
-// outside the source tree as well. It is the app's own native library: the host dlopens it by name, and the
-// Android linker looks a bare name up in LD_LIBRARY_PATH, in the caller's DT_RUNPATH and in the namespace's
-// default library paths — the app's native library folder is the only one of those the app controls.
-val jniLibsDir = rootProject.layout.projectDirectory.dir("../packaging/android-apk/.cache/jniLibs")
+// The payload (the environment in one archive, the driver) is built by packaging/android-apk/build_assets.py;
+// the working tree the build stages the tool's tree in is .cache/assets, and the APK takes .cache/apk-assets.
+val assetsDir = cachedDir("apk-assets")
+
+// The Vulkan driver loader (libadrenotools.so), built by packaging/android-apk/build_adrenotools.py. It is the
+// app's own native library: the host dlopens it by name, and the Android linker looks a bare name up in
+// LD_LIBRARY_PATH, in the caller's DT_RUNPATH and in the namespace's default library paths — the app's native
+// library folder is the only one of those the app controls.
+val jniLibsDir = cachedDir("jniLibs")
 
 // The app's own signing key: a keystore of the project's, so that every build of the app (this machine, CI, the
 // release) carries the same signature and installs over the one before it. Android refuses an update whose
