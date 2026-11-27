@@ -244,6 +244,23 @@ class DataPack(unittest.TestCase):
         finally:
             shutil.rmtree(t, ignore_errors=True)
 
+    def test_the_runtime_caches_survive_a_rebuild(self):   # a re-port rebuilds the pack whole, but the device's warm Vulkan caches are not the build's own
+        t = Path(tempfile.mkdtemp(prefix='nx2a_test_pack_'))
+        try:
+            (t / 'patched').mkdir(); (t / 'patched/main.patched.bin').write_bytes(b'x' * 10)
+            (t / 'romfs').mkdir(); (t / 'shaders.dmsv').write_bytes(b'DMSV')
+            p = profiles.load(NEO)
+            o = t / 'out-data'
+            datapack.build(o, profile=p, version='v196608', display='1.03', patched=t / 'patched', romfs=t / 'romfs', shaders=t / 'shaders.dmsv')
+            (o / 'vk_pipeline_cache.bin').write_bytes(b'CACHE')
+            (o / 'vk_pipelines.bin').write_bytes(b'PIPE')
+            datapack.build(o, profile=p, version='v196609', display='1.04', patched=t / 'patched', romfs=t / 'romfs', shaders=t / 'shaders.dmsv')
+            self.assertEqual((o / 'vk_pipeline_cache.bin').read_bytes(), b'CACHE')
+            self.assertEqual((o / 'vk_pipelines.bin').read_bytes(), b'PIPE')
+            self.assertFalse((t / 'out-data.cache-keep').exists())
+        finally:
+            shutil.rmtree(t, ignore_errors=True)
+
     def test_app_mode_pack(self):   # --app: the pack carries what the APK used to (host, drivers, icon, the gamepad's theme), named in the manifest
         t = Path(tempfile.mkdtemp(prefix='nx2a_test_pack_'))
         try:

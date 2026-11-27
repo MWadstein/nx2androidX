@@ -11,6 +11,8 @@
 #   settings.txt   the pause menu's first-launch defaults (the profile's setting rows, then the port's: --touch); the installer never replaces the player's own
 #   nx2a-data.json what the pack is: the game, the package, the version, the device features the profile requires (android.tsv requires), which the installer checks
 # Big trees are hard links into the extraction when the volume allows, so the pack takes no extra space; the pack is rebuilt whole when anything in it changes.
+# The host's writable Vulkan caches are the exception: they are warm-up state built on the device, keyed to the game build and
+# shader bundle, and rebuilding the pack must not force the player to compile every pipeline synchronously again (Xeno 3 hitches).
 import json, os, shutil, time
 from pathlib import Path
 from porter.revision import PLAYER_API_REVISION
@@ -19,6 +21,7 @@ from porter.upstream import settings_registry
 
 MANIFEST = 'nx2a-data.json'
 KEEP_ON_DEVICE = ('settings.txt',)          # the player's choices win over the pack's defaults
+RUNTIME_CACHE = ('vk_pipeline_cache.bin', 'vk_pipelines.bin')   # device-built warm-up state, carried across a re-port (the host rejects a stale identity)
 OWNED = ('mods', 'RomFS', 'aoc', 'sysdata')            # folders the pack owns on the device: files there that the pack lacks are stale (an older version's) and removed
 ROMFS = 'RomFS'
 
@@ -142,11 +145,19 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
     man['player_api_revision'] = PLAYER_API_REVISION   # the runtime interface the pack was built against: the app rebuilds the runtime when its own revision differs
     if parts := {p: k for p in SEEDABLE if (k := part_key(tmp, p))}: man['parts'] = parts   # the content keys install's seeding compares
     (tmp / MANIFEST).write_text(json.dumps(man, indent=2), encoding='utf-8')
-    # the exported saves (the player's backups) are not the build's own: the pack is rebuilt whole, so they are put aside and put back
+    # The exported saves (the player's backups) and the host's Vulkan caches are not the build's own: the pack is
+    # rebuilt whole, so they are put aside and put back. The caches carry the pipelines the device already compiled;
+    # rebuilding without them makes the next run compile every pipeline during play (Xeno 3's first-use hitches).
     keep = dst.with_name(dst.name + '.saves-keep')
     shutil.rmtree(keep, ignore_errors=True)
     exported = dst / 'saves'
     if exported.is_dir(): shutil.move(str(exported), str(keep))
+    cache_keep = dst.with_name(dst.name + '.cache-keep')
+    shutil.rmtree(cache_keep, ignore_errors=True)
+    cache_keep.mkdir()
+    for name in RUNTIME_CACHE:
+        src = dst / name
+        if src.is_file(): shutil.move(str(src), str(cache_keep / name))
     shutil.rmtree(dst, ignore_errors=True)   # the pack of the last port: it may be gone already (the player deleted it), and the files it holds are the build's own (hard links)
     for i in range(20):   # Windows: a folder just removed can stay delete-pending while another process (an indexer, a virus scan) holds it, and the rename is refused meanwhile
         try: tmp.rename(dst); break
@@ -155,7 +166,10 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
             time.sleep(0.5)
     if keep.is_dir():
         shutil.move(str(keep), str(dst / 'saves'))   # the backups are back where the save manager looks for them
-    shutil.rmtree(keep, ignore_errors=True)
+    for name in RUNTIME_CACHE:
+        src = cache_keep / name
+        if src.is_file(): shutil.move(str(src), str(dst / name))
+    shutil.rmtree(cache_keep, ignore_errors=True)
     return man
 
 
