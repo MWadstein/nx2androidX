@@ -199,7 +199,7 @@ the author of the commit that introduced them.
 - [x] The World Ends with You -Final Remix- · `0100C1500B82E000` · playable · base game 1.0.0 · 60 fps · played by touch · ported by @shirai91
 - [x] Tomodachi Life: Living the Dream · `010051F0207B2000` · playable · update 1.0.4 · 60 fps · ported by @shirai91
 - [ ] Trails in the Sky 2nd Chapter · `01007A2027548000` · 1.0.4
-- [x] Trails in the Sky the 2nd (Korean release) · `0100E8B028B54000` · playable · update 1.0.3a · 60 fps in the opening scene · tested on the Xiaomi 23117RK66C (Android 16, Adreno 750) with a Turnip Vulkan driver
+- [x] Trails in the Sky the 2nd (Korean release) · `0100E8B028B54000` · playable · update 1.0.3a · 60 fps in the opening scene · tested on the Xiaomi 23117RK66C (Android 16, Adreno 750) with a Turnip Vulkan driver · ported by @zFitness
 - [ ] TRIANGLE STRATEGY · `0100CC80140F8000` · 1.1.1 · 60 fps
 - [ ] TUNIC · `0100DA801624E000` · 1.0.3 · 60 fps
 - [x] Ultra Kaiju Monster Rancher · `01008E0019388000` · playable · update 1.0.1 · 30 fps (60 runs the game twice as fast) · tested on the AYN Odin 2 (Adreno 740) with a Turnip Vulkan driver · handheld 3D resolution by default, docked in the app menu · tested through the tutorials and battles · ported by @rospec14
@@ -214,7 +214,7 @@ the author of the commit that introduced them.
 - [ ] Well Dweller · `0100217023F6C000` · 1.0.0
 - [ ] Xenoblade Chronicles 2 · `0100E95004038000` · 2.1.0
 - [x] Xenoblade Chronicles 3 · `010074F013262000` · wip · update 2.2.0 · 30 fps · **work in progress**: some effects and models don't draw yet · ported by @shirai91
-- [ ] Xenoblade Chronicles X: Definitive Edition · `0100453019AA8000` · 1.0.1 · 60 fps
+- [ ] Xenoblade Chronicles X: Definitive Edition · `0100453019AA8000` · 1.0.2
 - [x] Xenoblade Chronicles: Definitive Edition · `0100FF500E34A000` · playable · update 2.0.0 · 30 fps · tested on the AYN Odin 2 with a Turnip driver · **tested to Colony 9**, the pause menu and saving: later maps not checked yet · the scene drops to 896x504 in heavy fights · rarely crashes at boot (restart) · ported by @rospec14
 - [ ] Yoshi's Crafted World · `01006000040C2000` · 1.0.1
 - [ ] ŌKAMI HD · `0100276009872000` · 1.0.0

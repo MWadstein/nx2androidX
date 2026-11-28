@@ -1,5 +1,6 @@
 """Monolith archive boundaries and multi-stage programs, without game data."""
 from pathlib import Path
+import os
 import struct
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import zlib
 _root = Path(__file__).resolve().parents[1]
 _engine = next(p for p in _root.iterdir() if p.is_dir() and 'native' in p.name.lower())
 sys.path.insert(0, str(_engine / 'dm/gfx/tools'))
+os.environ.setdefault('DM_GAME', '0100000000010000')   # shader_split imports the selected profile
 import shader_split as split
 
 
