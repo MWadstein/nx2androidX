@@ -371,9 +371,9 @@ Eligible transfer-only completion also reuses NVN CPU_UNCACHED baselines. Native
 
 ## Branches and worktrees
 
-Work happens on short-lived branches off `integration/main` in a worktree of its own
+Work happens on short-lived branches off `main` in a worktree of its own
 (`D:/Projects/nx2androidx-worktrees/<name>`), so the main checkout stays usable for builds and the
-game dumps under `.gamedump/`. `integration/main` is the one long-lived line: it is what the APK is
+game dumps under `.gamedump/`. `main` is the one long-lived line: it is what the APK is
 built from and what `myfork` receives.
 
 The rule has two halves, and the second is not optional: **a merged branch is deleted.** Merging is
@@ -386,7 +386,7 @@ After the merge:
 git worktree remove <worktree>          # refuses when it holds uncommitted work: read it first
 git branch -d <branch>                  # -d, so git itself says "not fully merged" when unsure
 git branch -D <branch>                  # only for a branch whose patches are in main under other
-                                        # commits (git cherry integration/main <branch> shows none)
+                                        # commits (git cherry main <branch> shows none)
 ```
 
 A worktree can contain reparse points; check before any recursive delete (`Get-ChildItem -Recurse

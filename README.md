@@ -249,6 +249,8 @@ Start here: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — the tools to 
 
 Running from the repository, the command line, the repository layout, building the bundle, tests and commit messages: [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md). How it is put together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+`main` is this fork's line — the latest working state, and what a clone builds from. `android` is a mirror of the upstream project's Android branch, kept for syncing; this fork's work does not live there.
+
 ## Contributing
 
 Contributions are welcome, and the first one does not have to be code.

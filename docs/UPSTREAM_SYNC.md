@@ -140,7 +140,7 @@ python devtools/upstream_conflict_surface.py --upstream upstream-nx2android/main
    example the Vulkan cache identity, queue raster origin, audio renderer offset and
    ARH2/NVN2 shader reader work).
 4. Validate on the device when the fix touches runtime behavior, then merge the branch
-   into `integration/main` so the next build starts from everything that works.
+   into `main` so the next build starts from everything that works.
 5. Record what was considered and why it was skipped. A mechanical diff is not a to-do
    list: many upstream-only files are platform front ends or profiles that do not apply.
 
@@ -167,25 +167,25 @@ above. No PRs or pushes to upstream unless explicitly asked.
 
 ## Local workflow
 
-`integration/main` is the working base for this single-person fork. The old
+`main` is the working base for this single-person fork. The old
 `integration/all-fixes` branch remains on `myfork` as a historical alias. Keep
 the base clean and pushed before starting new work. Do the work in a separate
 worktree so the base checkout stays untouched:
 
 ```
 git fetch myfork upstream-nxnative upstream-nx2android
-git worktree add ../nx2androidx-worktrees/fix/<name> -b fix/<name> integration/main
+git worktree add ../nx2androidx-worktrees/fix/<name> -b fix/<name> main
 # edit, add tests, run the Python/arch/Kotlin checks, validate on the device
 git -C ../nx2androidx-worktrees/fix/<name> commit -m "fix(<area>): ..."
 git merge --no-ff fix/<name> -m "chore: fold <name>"
-git push myfork integration/main
+git push myfork main
 git worktree remove ../nx2androidx-worktrees/fix/<name>
 ```
 
 Before merging, confirm the branch contains exactly the intended commits and
 that the base has no uncommitted changes. After merging, run the checks again
 on the base. If shared runtime C changed, bump `PLAYER_API_REVISION`, rebuild
-the APK from `integration/main`, install it, and let the device rebuild
+the APK from `main`, install it, and let the device rebuild
 game runtimes. Build from the base branch, never from a feature worktree, so a
 fix cannot exist only in a branch.
 
