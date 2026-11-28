@@ -26,9 +26,11 @@ $gitCommon = & git -C $repo rev-parse --git-common-dir
 $mainRepo = (Resolve-Path (Join-Path $gitCommon '..')).Path
 $cacheRoot = Join-Path $mainRepo 'packaging\android-apk\.cache'
 $env:NX2A_CACHE = $cacheRoot
-$env:NX2A_CSHARP_PREBUILT = Join-Path $cacheRoot 'csharp-tools'
 $env:NX2A_ADRENOTOOLS_PREBUILT = Join-Path $cacheRoot 'adrenotools-prebuilt'
-Remove-Item Env:DOTNET -ErrorAction SilentlyContinue  # source build of dmsh_xlate fails on this fork
+# Build the C# tools from the coherent vendored source when DOTNET is set.
+# Do not force NX2A_CSHARP_PREBUILT here: it would overwrite a fresh translator
+# with stale cached assemblies. build_nx_extract.py keeps the explicit prebuilt
+# fallback for machines that deliberately have no .NET SDK.
 
 $debs = Join-Path $cacheRoot 'debs'
 if (-not $NoPayload -and -not $KeepDebs) {

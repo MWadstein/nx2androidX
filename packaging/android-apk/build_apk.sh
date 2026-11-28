@@ -72,9 +72,10 @@ if [[ -n $payload_flag ]]; then
     echo "   skipped (--no-payload): the phone must already have the environment"
 else
     "$py" "$here/build_assets.py" --out "$cache/assets" --apk-out "$cache/apk-assets" \
-        --payload "$cache/payload-arm64.tar.gz" --toolchain "$cache/toolchain"
+        --payload "$cache/payload-arm64.tar.gz" --toolchain "$cache/toolchain" --cache "$cache"
     # nx_extract for the phone, built here (the phone's .NET SDK cannot): after the assets, which it joins
-    "$py" "$here/build_nx_extract.py" || echo "   (no nx_extract for the phone: the .NET SDK is missing)"
+    "$py" "$here/build_nx_extract.py" --out "$cache/assets/tool/tools/nx_extract" \
+        || echo "   (no nx_extract for the phone: the .NET SDK is missing)"
     # The phone runs the C# tools but cannot build them: without them it would try to build the shader
     # translator itself and wait for a network that is not there.
     for t in "$cache/assets/tool/tools/nx_extract/nx_extract" "$cache/assets/tool/tools/dmsh_xlate/dmsh_xlate.dll"; do
@@ -93,7 +94,7 @@ echo ">> the Vulkan driver loader"
 
 # Finalize after the C# tools and hooks have joined the tree: the archive is packed again, so it holds them.
 if [[ -z $payload_flag ]]; then
-    "$py" "$here/build_assets.py" --out "$cache/assets" --apk-out "$cache/apk-assets" --finalize
+    "$py" "$here/build_assets.py" --out "$cache/assets" --apk-out "$cache/apk-assets" --finalize --cache "$cache"
 fi
 
 # 4. the APK

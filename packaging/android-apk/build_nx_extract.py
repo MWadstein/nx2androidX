@@ -48,6 +48,15 @@ def copy_prebuilt(src, out):
     return True
 
 
+def apphost(out: Path, name: str, runtime: str) -> Path | None:
+    """Find a published apphost by target RID, not the build host OS."""
+    primary = out / (f'{name}.exe' if runtime.startswith('win-') else name)
+    if primary.exists():
+        return primary
+    alternate = out / (name if primary.suffix else f'{name}.exe')
+    return alternate if alternate.exists() else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=str(DEFAULT_OUT))
@@ -81,8 +90,8 @@ def main():
         for f in sorted(out.iterdir()):
             if f.is_file():
                 print(f'   {f.name:40} {f.stat().st_size / 1024:8.0f} KB')
-        exe = out / (f'{name}.exe' if os.name == 'nt' else name)
-        if not exe.exists():
+        exe = apphost(out, name, a.runtime)
+        if exe is None:
             print(f'>> no executable in {out}')
             return 1
         # the apphost is a Linux program: it has to be executable (the phone cannot exec a 0644 file)

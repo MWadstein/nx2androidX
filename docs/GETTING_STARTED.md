@@ -71,8 +71,8 @@ cd android && ./gradlew :app:assembleDebug -PnoPayload    # about 900 KB, second
 ```
 
 The full build fetches the rootfs payload (needs `gh`), fetches and assembles the build tools, stages the
-tool's tree, pre-builds the two C# tools (`nx_extract`, the shader translator — needs the .NET SDK, or
-`DOTNET=/path/to/dotnet`), builds the Vulkan driver loader, and runs Gradle. Downloads are kept in
+tool's tree, pre-builds the two C# tools (`nx_extract` and the Ampere-capable shader translator — needs the
+.NET 10 SDK, or `DOTNET=/path/to/dotnet`), builds the Vulkan driver loader, and runs Gradle. Downloads are kept in
 `packaging/android-apk/.cache/` (not committed). The parts and what the phone can and cannot do:
 [packaging/android-apk/README.md](../packaging/android-apk/README.md).
 
