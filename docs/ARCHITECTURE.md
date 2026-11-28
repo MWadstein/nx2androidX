@@ -574,6 +574,21 @@ through domain contracts) are design rules kept by review, not by the build. The
 `appstate/` remains application-scoped because the foreground service, the Activity and multiple feature
 ViewModels observe the same in-flight work.
 
+### The app's preferences and the `:play` process
+
+The app's settings live in `SharedPreferences`, file `nx2a`. SharedPreferences is not safe across processes:
+each process holds its own copy of a file, and a write rewrites the whole file from that copy. The game page
+runs in `:play`, and the main process writes `nx2a` again on every launch (the last-launch identity), so a
+change made in the game's drawer would be erased by the next main-process write and read back as it was before.
+
+What only the game page writes therefore lives in a file of its own, `nx2a.game`, reached through
+`PrefsStore.game(context)`: the frame-rate pin and GPU clock (`rate.*`), the frame generator (`fg.*`), motion
+(`motion.*`), cheats (`cheats.*`), the performance HUD's lines and fields (`hud.*`) and the external display.
+No other process writes that file, so nothing can rewrite it from a stale copy. Reads fall back to `nx2a`, so
+the values an older version saved there are still seen; the first change saves them in the game page's file.
+Those writes commit instead of apply: the game ends by killing its process, and a queued write would die with
+it. `game/input/PadPrefs.kt` (`nx2a.pad`) follows the same rule for the gamepad's own settings.
+
 ### The app's own language
 
 The app's words live in its own resources: `res/values/strings.xml` is English (the default bundle) and

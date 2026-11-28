@@ -690,10 +690,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         val pack = packPath ?: return endProcess()
         val titleId = packTitleId
         // the title id keeps this game's saves, temp and log apart from the others' (host_start_common)
-        fgSettings = titleId?.let { FrameGenSettings(PrefsStore(this), it) }
-        rateSettings = titleId?.let { RateSettings(PrefsStore(this), it) }
-        motionSettings = titleId?.let { MotionSettings(PrefsStore(this), it) }
-        cheatSettings = titleId?.let { CheatSettings(PrefsStore(this), it) }
+        // 抽屉里的偏好写游戏页自己的文件（nx2a.game）：主进程写 nx2a，见 PrefsStore.game 的注释
+        val gamePrefs = PrefsStore.game(this)
+        fgSettings = titleId?.let { FrameGenSettings(gamePrefs, it) }
+        rateSettings = titleId?.let { RateSettings(gamePrefs, it) }
+        motionSettings = titleId?.let { MotionSettings(gamePrefs, it) }
+        cheatSettings = titleId?.let { CheatSettings(gamePrefs, it) }
         padPlayers = PadPlayers(this, PadPlayers.GLOBAL)   // 谁玩谁是全局一份（手柄中心与这里读写同一份）
         // 手柄的档案（每只手柄一份）与手柄的枚举：中心靠它
         loadPadProfiles()
@@ -709,11 +711,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         }
         // the performance HUD's own preferences: the two lines, the fields, the temperature's unit
         val prefs = PrefsStore(this)
-        hudStats = prefs.bool(PrefsStore.HUD_STATS, false)
-        hudDevice = prefs.bool(PrefsStore.HUD_DEVICE, false)
-        hudFields = HudField.of(prefs.str(PrefsStore.HUD_FIELDS, "").split(",").filter { it.isNotBlank() })
+        hudStats = gamePrefs.bool(PrefsStore.HUD_STATS, false)
+        hudDevice = gamePrefs.bool(PrefsStore.HUD_DEVICE, false)
+        hudFields = HudField.of(gamePrefs.str(PrefsStore.HUD_FIELDS, "").split(",").filter { it.isNotBlank() })
             .ifEmpty { HudField.DEFAULT }
-        hudFahrenheit = prefs.bool(PrefsStore.HUD_TEMP_F, false)
+        hudFahrenheit = gamePrefs.bool(PrefsStore.HUD_TEMP_F, false)
         // 助手的游戏内入口：默认在画面上，玩家可以在设置里收走
         agentBadge = prefs.bool(PrefsStore.AGENT_BADGE, true)
         // The chosen save root: the host's setenv(..., 0) lets this row replace its internal default.
@@ -802,8 +804,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 setScreenBlank(false)
             }
         })
-        // 玩家开过这个模式吗（App 的偏好是唯一真值）
-        externalOn = PrefsStore(this).bool(PrefsStore.EXTERNAL_DISPLAY, false)
+        // 玩家开过这个模式吗（App 的偏好是唯一真值；这个开关只游戏页写，所以它在游戏页的文件里）
+        externalOn = PrefsStore.game(this).bool(PrefsStore.EXTERNAL_DISPLAY, false)
         if (externalOn && externalSupported) startExternal()
     }
 
@@ -831,7 +833,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     /** 抽屉的开关：外接屏模式（即时生效：插上屏就切过去，拔掉就切回来） */
     private fun setExternal(on: Boolean) {
         externalOn = on
-        PrefsStore(this).put(PrefsStore.EXTERNAL_DISPLAY, on)
+        PrefsStore.game(this).put(PrefsStore.EXTERNAL_DISPLAY, on)
         if (on) startExternal() else stopExternal()
     }
 
@@ -1003,13 +1005,13 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     // ---- 性能 HUD 的开关与字段（App 的偏好，唯一真值）----
 
-    private fun saveHudStats(on: Boolean) { hudStats = on; PrefsStore(this).put(PrefsStore.HUD_STATS, on) }
-    private fun saveHudDevice(on: Boolean) { hudDevice = on; PrefsStore(this).put(PrefsStore.HUD_DEVICE, on) }
+    private fun saveHudStats(on: Boolean) { hudStats = on; PrefsStore.game(this).put(PrefsStore.HUD_STATS, on) }
+    private fun saveHudDevice(on: Boolean) { hudDevice = on; PrefsStore.game(this).put(PrefsStore.HUD_DEVICE, on) }
     private fun saveHudFields(fields: Set<HudField>) {
         hudFields = fields
-        PrefsStore(this).put(PrefsStore.HUD_FIELDS, HudField.keys(fields))
+        PrefsStore.game(this).put(PrefsStore.HUD_FIELDS, HudField.keys(fields))
     }
-    private fun saveHudFahrenheit(on: Boolean) { hudFahrenheit = on; PrefsStore(this).put(PrefsStore.HUD_TEMP_F, on) }
+    private fun saveHudFahrenheit(on: Boolean) { hudFahrenheit = on; PrefsStore.game(this).put(PrefsStore.HUD_TEMP_F, on) }
 
     /**
      * 帧率档位：App 的偏好是唯一真值（按游戏记着），宿主那边只是运行时的副本——

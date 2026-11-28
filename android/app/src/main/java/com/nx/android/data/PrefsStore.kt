@@ -17,11 +17,32 @@ import org.json.JSONObject
  * are the old app's, unchanged: an update keeps its settings.
  */
 @Singleton
-class PrefsStore @Inject constructor(@ApplicationContext ctx: Context) {
+class PrefsStore private constructor(
+    @ApplicationContext private val ctx: Context,
+    private val file: String,
+) {
+
+    /** Hilt's one instance: the app's own settings file ([NAME]), written by the main process. */
+    @Inject
+    constructor(@ApplicationContext ctx: Context) : this(ctx, NAME)
 
     companion object {
         // the prefs file's name (the app's own settings, one file)
         const val NAME = "nx2a"
+        // the game page's own file: only the `:play` process writes it (see [game])
+        const val GAME_NAME = "nx2a.game"
+
+        /**
+         * The game page's store (the `:play` process). SharedPreferences is not safe across processes: each
+         * process keeps its own copy of a file, and the main process's next write (the library's scan, the
+         * port history, the last launch) rewrites the whole file from its stale copy, dropping what the game
+         * page just wrote - the drawer's settings then read back as they were before the change.
+         *
+         * So the game page writes a file of its own, which no other process ever writes. Reads fall back to
+         * [NAME]: the keys an older version saved there are still seen, and the next change saves them here.
+         * Writes commit, because the game ends by killing its process and a queued apply() dies with it.
+         */
+        fun game(ctx: Context) = PrefsStore(ctx, GAME_NAME)
         // the old app's key, unchanged
         const val KEYS = "keys"
         // the imported firmware package (a zip): its file name; the unpacked copy is in the app's own folder
@@ -73,57 +94,76 @@ class PrefsStore @Inject constructor(@ApplicationContext ctx: Context) {
         const val SAVE_ROOT = "save.root"
     }
 
-    val prefs: SharedPreferences = ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+    val prefs: SharedPreferences = ctx.getSharedPreferences(file, Context.MODE_PRIVATE)
+
+    /** The main process's file: only the game page's store falls back to it (older versions wrote there) */
+    private val legacy: SharedPreferences? =
+        if (file == NAME) null else ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
     /** prod.keys 的路径：库的发起前提、设置页、引导都读它；picker 与引导写它（一份，就是这一个） */
-    var keys by mutableStateOf(prefs.getString(KEYS, "") ?: "")
+    var keys by mutableStateOf(str(KEYS))
         private set
 
     fun writeKeys(path: String) {
         keys = path.trim()
-        prefs.edit().putString(KEYS, keys).apply()
+        write { putString(KEYS, keys) }
     }
 
     /** The chosen save folder, or "" for the app's internal default. A Compose read. */
-    var saveRoot by mutableStateOf(prefs.getString(SAVE_ROOT, "") ?: "")
+    var saveRoot by mutableStateOf(str(SAVE_ROOT))
         private set
 
     fun writeSaveRoot(path: String) {
         val value = path.trim().trimEnd('/')
         saveRoot = value
-        prefs.edit().putString(SAVE_ROOT, value).apply()
+        write { putString(SAVE_ROOT, value) }
     }
 
     fun clearSaveRoot() {
         saveRoot = ""
-        prefs.edit().remove(SAVE_ROOT).apply()
+        write { remove(SAVE_ROOT) }
     }
 
     // ---- 通用读写（引导与库的记忆；键名见常量） ----
 
-    fun str(key: String, def: String = ""): String = prefs.getString(key, def) ?: def
+    fun str(key: String, def: String = ""): String =
+        prefs.getString(key, null) ?: legacy?.getString(key, null) ?: def
 
-    fun bool(key: String, def: Boolean = false): Boolean = prefs.getBoolean(key, def)
+    fun bool(key: String, def: Boolean = false): Boolean = when {
+        prefs.contains(key) -> prefs.getBoolean(key, def)
+        legacy?.contains(key) == true -> legacy.getBoolean(key, def)
+        else -> def
+    }
 
-    fun put(key: String, value: String?) = prefs.edit().putString(key, value).apply()
+    /**
+     * 写一次。[NAME] 走 apply()（主进程活在玩家的操作里，写盘不必挡路）；游戏页的文件当场 commit()——
+     * 游戏结束就是结束进程，排队的写来不及落盘。
+     */
+    private fun write(change: SharedPreferences.Editor.() -> Unit) {
+        val edit = prefs.edit()
+        edit.change()
+        if (file == NAME) edit.apply() else edit.commit()
+    }
 
-    fun put(key: String, value: Boolean) = prefs.edit().putBoolean(key, value).apply()
+    fun put(key: String, value: String?) = write { putString(key, value) }
+
+    fun put(key: String, value: Boolean) = write { putBoolean(key, value) }
 
     // ---- JSON（历史、按游戏配置、产物映射） ----
 
     fun json(key: String): JSONObject = try {
-        JSONObject(prefs.getString(key, "{}") ?: "{}")
+        JSONObject(str(key, "{}"))
     } catch (e: Exception) {
         JSONObject()
     }
 
-    fun putJson(key: String, o: JSONObject) = prefs.edit().putString(key, o.toString()).apply()
+    fun putJson(key: String, o: JSONObject) = write { putString(key, o.toString()) }
 
     fun array(key: String): JSONArray = try {
-        JSONArray(prefs.getString(key, "[]") ?: "[]")
+        JSONArray(str(key, "[]"))
     } catch (e: Exception) {
         JSONArray()
     }
 
-    fun putArray(key: String, a: JSONArray) = prefs.edit().putString(key, a.toString()).apply()
+    fun putArray(key: String, a: JSONArray) = write { putString(key, a.toString()) }
 }
