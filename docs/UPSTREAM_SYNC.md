@@ -167,10 +167,10 @@ above. No PRs or pushes to upstream unless explicitly asked.
 
 ## Local workflow
 
-`main` is the working base for this single-person fork. The old
-`integration/all-fixes` branch remains on `myfork` as a historical alias. Keep
-the base clean and pushed before starting new work. Do the work in a separate
-worktree so the base checkout stays untouched:
+`main` is the working base for this single-person fork, and the only branch the
+fork carries: every other branch lives at the parent (`origin`) or is merged
+here and deleted. Keep the base clean and pushed before starting new work. Do
+the work in a separate worktree so the base checkout stays untouched:
 
 ```
 git fetch myfork upstream-nxnative upstream-nx2android
