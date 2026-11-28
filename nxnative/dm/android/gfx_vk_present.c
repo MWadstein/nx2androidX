@@ -897,8 +897,8 @@ static int window_rate_changed(double fps, double *rate_fps, double *want_fps, u
     return 0;
 }
 // ---- the performance HUD's counters (dm_present_sample) ----
-// The game's frames presented, the frame generation's frames presented, and the intervals between the game's frames (their sum and their count)
-// for the average frame time. The app reads two samples a second apart and does the arithmetic.
+// The game's frames presented, the frame generation's frames presented, the intervals between the game's frames (their sum and their count)
+// for the average frame time, the display's refresh cycle, and the cumulative GPU busy time. The app reads two samples a second apart and does the arithmetic.
 static _Atomic uint64_t g_hud_game, g_hud_gen, g_hud_span_ns, g_hud_span_n;
 static _Atomic uint64_t g_hud_last_ns;   // the last game's frame's present time (the present thread's own clock)
 static void hud_count(int with_meta, double period, uint64_t now) {
@@ -915,13 +915,15 @@ static void hud_count(int with_meta, double period, uint64_t now) {
     } else atomic_fetch_add_explicit(&g_hud_gen, 1, memory_order_relaxed);
 }
 uint64_t vk_refresh_cycle_ns(void);
-void dm_present_sample(uint64_t out[5]) {
+uint64_t vk_gpu_ns_total(void);
+void dm_present_sample(uint64_t out[6]) {
     if (!out) return;
     out[0] = atomic_load_explicit(&g_hud_game, memory_order_relaxed);
     out[1] = atomic_load_explicit(&g_hud_gen, memory_order_relaxed);
     out[2] = atomic_load_explicit(&g_hud_span_ns, memory_order_relaxed);
     out[3] = atomic_load_explicit(&g_hud_span_n, memory_order_relaxed);
     out[4] = vk_refresh_cycle_ns();
+    out[5] = vk_gpu_ns_total();
 }
 static void pace_reset(void) { g_pace_target = g_pace_ideal = g_pace_anchor = g_refresh_ns = 0; }
 static uint64_t pace_snap(uint64_t t) {   // the first vsync at or after t on the grid through the anchor
@@ -1227,7 +1229,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     static uint64_t no_img, undrawn, shown;
     if (n == 600) { void crash_handlers_check(const char *when); crash_handlers_check("after 600 presents"); }
     if (n % 600 == 0) {
-        extern struct { uint64_t draws, skip_prog, skip_rt, skip_pipe, passes, folded, dispatches, pipes_built, rt_kept, ns_exec, ns_desc, ns_pipe, max_pass_draws; } g_vkst; extern uint64_t g_ubd_landed, g_ubd_superseded, g_ubd_shadows, g_ubd_bytes, g_ns_submit, g_gpu_ns, g_pkg_n, g_pkg_bytes, g_pkg_ns, g_set_hits, g_set_new, g_set_key_bypass, g_ubd_racy, g_ns_set_build, g_ns_set_hash, g_ns_set_new, g_set_memo, g_set_memo_bad;
+        extern struct { uint64_t draws, skip_prog, skip_rt, skip_pipe, passes, folded, dispatches, pipes_built, rt_kept, ns_exec, ns_desc, ns_pipe, max_pass_draws; } g_vkst; extern uint64_t g_ubd_landed, g_ubd_superseded, g_ubd_shadows, g_ubd_bytes, g_ns_submit, g_pkg_n, g_pkg_bytes, g_pkg_ns, g_set_hits, g_set_new, g_set_key_bypass, g_ubd_racy, g_ns_set_build, g_ns_set_hash, g_ns_set_new, g_set_memo, g_set_memo_bad; uint64_t gpu_ns = vk_gpu_ns_total();
         static uint64_t psb, psh, psn, pe, pd, pp, ps, pb, pdr, pg, pkn, pkb, pkt, psm;
         VKLOG("replay up to present %llu: draws %llu, skipped (no program %llu, no target %llu, no pipeline %llu), passes %llu, clears folded %llu, dispatches %llu, pipelines %llu; presents shown %llu, no image %llu, never drawn %llu; uniform updates landed %llu (superseded %llu, shadows %llu, CPU reads racing a GPU write %llu), same targets kept %llu, most draws in one pass %llu",
               (unsigned long long)n, (unsigned long long)g_vkst.draws, (unsigned long long)g_vkst.skip_prog, (unsigned long long)g_vkst.skip_rt, (unsigned long long)g_vkst.skip_pipe,
@@ -1235,7 +1237,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
               (unsigned long long)shown, (unsigned long long)no_img, (unsigned long long)undrawn, (unsigned long long)g_ubd_landed, (unsigned long long)g_ubd_superseded, (unsigned long long)g_ubd_shadows, (unsigned long long)g_ubd_racy, (unsigned long long)g_vkst.rt_kept, (unsigned long long)g_vkst.max_pass_draws);
         double nd = g_vkst.draws > pdr ? (double)(g_vkst.draws - pdr) / 600 : 0;
         VKLOG("replay per frame (last 600): %.0f draws, replay %.2f ms (descriptor sets %.2f, pipeline keys %.2f), queue submit %.2f ms, uniform shadows %.0f KB; GPU busy %.2f ms; texture uploads %.1f (%.2f MB, %.2f ms); descriptor sets reused %llu, new %llu, key arena bypasses %llu (collecting %.2f ms, hashing %.2f, new ones %.2f), kept per stage %.0f a frame (memo differences %llu)",
-              nd, (g_vkst.ns_exec - pe) / 6e8, (g_vkst.ns_desc - pd) / 6e8, (g_vkst.ns_pipe - pp) / 6e8, (g_ns_submit - ps) / 6e8, (g_ubd_bytes - pb) / 600.0 / 1024, (g_gpu_ns - pg) / 6e8, (g_pkg_n - pkn) / 600.0, (g_pkg_bytes - pkb) / 600.0 / 1048576, (g_pkg_ns - pkt) / 6e8, (unsigned long long)g_set_hits, (unsigned long long)g_set_new, (unsigned long long)g_set_key_bypass, (g_ns_set_build - psb) / 6e8, (g_ns_set_hash - psh) / 6e8, (g_ns_set_new - psn) / 6e8,
+              nd, (g_vkst.ns_exec - pe) / 6e8, (g_vkst.ns_desc - pd) / 6e8, (g_vkst.ns_pipe - pp) / 6e8, (g_ns_submit - ps) / 6e8, (g_ubd_bytes - pb) / 600.0 / 1024, (gpu_ns - pg) / 6e8, (g_pkg_n - pkn) / 600.0, (g_pkg_bytes - pkb) / 600.0 / 1048576, (g_pkg_ns - pkt) / 6e8, (unsigned long long)g_set_hits, (unsigned long long)g_set_new, (unsigned long long)g_set_key_bypass, (g_ns_set_build - psb) / 6e8, (g_ns_set_hash - psh) / 6e8, (g_ns_set_new - psn) / 6e8,
               (g_set_memo - psm) / 600.0, (unsigned long long)g_set_memo_bad);
         { extern uint64_t g_order_kept, g_order_ended; static uint64_t pk, pn;   // gfx_vk_exec.c g_order_keep
           if (g_order_kept + g_order_ended > pk + pn) VKLOG("order-only barriers per frame (last 600): %.1f kept inside their pass, %.1f ended it", (g_order_kept - pk) / 600.0, (g_order_ended - pn) / 600.0);
@@ -1255,7 +1257,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
                   (g_cbmiss[1] - pm[1]) / 600.0, (g_cbmiss[2] - pm[2]) / 600.0, (g_tvc_hit - pth) / 600.0, (g_tvc_miss - ptm) / 600.0, (g_tvc_cold - ptc) / 600.0);
             p2h = g_c2_hit; p2p = g_c2_put; pdc = g_drv_content; memcpy(pw, g_memo_why, sizeof pw); memcpy(pc, g_cbpath, sizeof pc); memcpy(pm, g_cbmiss, sizeof pm);
             prh = g_rmemo_hit; prp = g_rmemo_put; pth = g_tvc_hit; ptm = g_tvc_miss; ptc = g_tvc_cold; } }
-        pe = g_vkst.ns_exec; pd = g_vkst.ns_desc; pp = g_vkst.ns_pipe; ps = g_ns_submit; pb = g_ubd_bytes; pdr = g_vkst.draws; pg = g_gpu_ns; pkn = g_pkg_n; pkb = g_pkg_bytes; pkt = g_pkg_ns; psb = g_ns_set_build; psh = g_ns_set_hash; psn = g_ns_set_new; psm = g_set_memo;
+        pe = g_vkst.ns_exec; pd = g_vkst.ns_desc; pp = g_vkst.ns_pipe; ps = g_ns_submit; pb = g_ubd_bytes; pdr = g_vkst.draws; pg = gpu_ns; pkn = g_pkg_n; pkb = g_pkg_bytes; pkt = g_pkg_ns; psb = g_ns_set_build; psh = g_ns_set_hash; psn = g_ns_set_new; psm = g_set_memo;
     }
     if (!im) { no_img++; return present_enqueue(NULL, NULL, n, period); }
     if (im->layout != VK_IMAGE_LAYOUT_GENERAL) { undrawn++; return present_enqueue(NULL, NULL, n, period); }   // never drawn into: nothing to show yet

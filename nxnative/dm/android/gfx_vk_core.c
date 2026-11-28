@@ -1153,7 +1153,7 @@ struct vksub; static void pools_copy_back(const struct vksub *s);
 #define NSLOT 6
 #define MAIN_CBS 32   // (allocated as used: DM_VK_PASS_SPLIT cuts inside passes as well)
 // GPU time: a timestamp at the start and end of each submission's main command buffer (one queue: their sum is the time the GPU was busy)
-static VkQueryPool g_tsq; uint64_t g_gpu_ns;
+static VkQueryPool g_tsq; _Atomic uint64_t g_gpu_ns;
 // Timestamp counters (ReportCounter TIMESTAMP): each writes a GPU timestamp where it is in the command stream (CQ per slot), and at completion it gets the guest
 // clock now less how long before the submission's end the GPU passed it. They used to all get the completion time of their submission: a game timing its GPU
 // work between two counters read 0 when both were in one submission and the gap between completions (our CPU replay included) when not. Xenoblade Chronicles 3
@@ -1831,6 +1831,7 @@ double vk_gpu_ms_recent(void) {   // the latest finished frame's GPU time among 
     for (uint64_t k = 2; k < 8 && k <= f; k++) { double g = mtl_gpu_ms(f - k); if (g >= 0) return g; }
     return -1;
 }
+uint64_t vk_gpu_ns_total(void) { return atomic_load_explicit(&g_gpu_ns, memory_order_relaxed); }   // the HUD's device-wide GPU busy counter
 // DM_VK_PASS_SPIKE=<ms> (read at start-up, with DM_VK_PASS_TIMES; default 25): a frame whose timed passes and dispatches, or whose submissions, take more than that lists its costliest
 // ones, to find what a one-frame GPU spike drew (Tears of the Kingdom: 25-180 ms frames among 10-13 ms ones while fighting). Completion thread only
 static uint64_t g_sf_frame = ~0ull; static struct { double ms; pass_meta m; } g_sf[PASSQ * 4]; static int g_nsf; static double g_sf_tot;
@@ -1857,7 +1858,7 @@ static void *completion_main(void *a) {
         if (V.has_timeline) wait_fence(c->fence); else { VkResult r = vkWaitForFences(V.dev, 1, &g_fring[c->fence % NFRING], VK_TRUE, UINT64_MAX); if (r != VK_SUCCESS) die("[vk] GPU fence wait did not complete: %d", r); }
         if (g_shadow_pools && c->rslot >= 0) pools_copy_back(&g_slot[c->rslot]);
         if (g_tsq && c->slot >= 0) { uint64_t t[2]; if (vkGetQueryPoolResults(V.dev, g_tsq, 2 * (uint32_t)c->slot, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] > t[0])
-            { uint64_t ns = (uint64_t)((double)(t[1] - t[0]) * V.props.limits.timestampPeriod); g_gpu_ns += ns; int k = (int)(c->frame % 64);
+            { uint64_t ns = (uint64_t)((double)(t[1] - t[0]) * V.props.limits.timestampPeriod); atomic_fetch_add_explicit(&g_gpu_ns, ns, memory_order_relaxed); int k = (int)(c->frame % 64);
               if (g_frame_gpu_of[k] != c->frame + 1) { g_frame_gpu[k] = 0; g_frame_gpu_of[k] = c->frame + 1; } g_frame_gpu[k] += ns; } }
         if (g_pq && pass_times_on() && c->slot >= 0) {   // this submission's passes
             int np = c->npass; uint64_t t[PASSQ * 2];

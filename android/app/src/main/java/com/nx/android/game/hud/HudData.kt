@@ -53,17 +53,18 @@ data class HudSample(
     val charging: Boolean = false,
 )
 
-/** The host's counters, one sample: the game's frames, the generation's frames, the frame intervals (sum and count), the refresh */
+/** The host's counters, one sample: the game's frames, the generation's frames, the frame intervals (sum and count), the refresh and cumulative GPU time */
 data class HostSample(
     val gameFrames: Long,
     val genFrames: Long,
     val spanNs: Long,
     val spanCount: Long,
     val refreshNs: Long,
+    val gpuNs: Long = 0,
 )
 
-/** What two host samples, an interval apart, say about the frame rate */
-data class FpsStats(val gameFps: Double?, val presentedFps: Double?, val frameMs: Double?)
+/** What two host samples, an interval apart, say about the frame rate and GPU use */
+data class FpsStats(val gameFps: Double?, val presentedFps: Double?, val frameMs: Double?, val gpuPercent: Double? = null)
 
 object HudData {
 
@@ -104,7 +105,10 @@ object HudData {
         val shown = game + gen
         val presentedFps = if (shown > 0) shown * 1000.0 / elapsedMs else null
         val frameMs = if (spans > 0 && spanNs > 0) spanNs / 1e6 / spans else null
-        return FpsStats(gameFps, presentedFps, frameMs)
+        val gpuNs = cur.gpuNs - prev.gpuNs
+        val gpuPercent = if (cur.gpuNs > 0 && gpuNs >= 0)
+            (gpuNs / (elapsedMs * 1_000_000.0) * 100.0).coerceIn(0.0, 100.0) else null
+        return FpsStats(gameFps, presentedFps, frameMs, gpuPercent)
     }
 
     /**

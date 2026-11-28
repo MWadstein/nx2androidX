@@ -83,14 +83,17 @@ private fun PerfHud(
             val now = SystemClock.elapsedRealtime()
             val raw = runCatching { Native.perfSample() }.getOrNull()
             if (raw != null && raw.size >= 5) {
-                val cur = HostSample(raw[0], raw[1], raw[2], raw[3], raw[4])
+                val cur = HostSample(raw[0], raw[1], raw[2], raw[3], raw[4], raw.getOrNull(5) ?: 0L)
                 val stats = HudData.stats(prevHost, cur, now - prevAt)
                 prevHost = cur
                 prevAt = now
-                sample = HudSampler.take(ctx, fields).copy(
+                val device = HudSampler.take(ctx, fields)
+                sample = device.copy(
                     gameFps = stats.gameFps,
                     presentedFps = stats.presentedFps,
                     frameMs = stats.frameMs,
+                    // the host's timestamp counter is authoritative; sysfs is only the old-host/device fallback
+                    gpuPercent = stats.gpuPercent?.toFloat() ?: device.gpuPercent,
                     // the frame generation's state (the label follows it): an old host has no entry for it
                     fgState = HudData.fgState(runCatching { Native.frameGenStatus() }.getOrNull()),
                 )

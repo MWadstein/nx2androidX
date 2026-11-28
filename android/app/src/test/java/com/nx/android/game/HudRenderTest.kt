@@ -32,6 +32,21 @@ class HudRenderTest {
     }
 
     @Test
+    fun `GPU use comes from the host's cumulative busy timer`() {
+        val a = host(100, 0, 1_000_000_020, 60).copy(gpuNs = 1_000_000_000)
+        val b = host(160, 0, 2_000_000_040, 120).copy(gpuNs = 1_500_000_000)
+        val s = HudData.stats(a, b, 1000)
+        assertEquals(50.0, s.gpuPercent!!, 0.01)
+    }
+
+    @Test
+    fun `an old host without the GPU timer leaves the device fallback in charge`() {
+        val a = host(100, 0, 1_000_000_020, 60)
+        val b = host(160, 0, 2_000_000_040, 120)
+        assertNull(HudData.stats(a, b, 1000).gpuPercent)
+    }
+
+    @Test
     fun `the generated frames count towards what reaches the screen`() {
         val a = host(100, 0, 1_000_000_020, 60)
         val b = host(160, 120, 2_000_000_040, 120)
@@ -43,7 +58,7 @@ class HudRenderTest {
     @Test
     fun `the first sample has nothing to compare with`() {
         val s = HudData.stats(null, host(10, 0, 1_000_000, 1), 1000)
-        assertNull(s.gameFps); assertNull(s.presentedFps); assertNull(s.frameMs)
+        assertNull(s.gameFps); assertNull(s.presentedFps); assertNull(s.frameMs); assertNull(s.gpuPercent)
     }
 
     @Test

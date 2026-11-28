@@ -107,7 +107,8 @@ object Native {
 
     /**
      * 性能 HUD 的计数（gfx_vk_present.c 的 dm_present_sample）：0 游戏帧数、1 帧生成帧数、2 帧间隔之和(纳秒)、
-     * 3 帧间隔的个数、4 屏幕的刷新周期(纳秒)。App 隔一秒读两次，自己算帧率与帧时间。
+     * 3 帧间隔的个数、4 屏幕的刷新周期(纳秒)、5 累计 GPU 忙碌时间(纳秒)。App 隔一秒读两次，自己算帧率、帧时间与 GPU 占用。
+     * 旧宿主只返回前五项；第六项缺失时 HUD 回退到系统计数器。
      */
     @JvmStatic external fun perfSample(): LongArray
 
