@@ -550,21 +550,6 @@ private fun HudRows(
 @Composable
 private fun PerfRows(pin: Int, onPick: (RatePin) -> Unit, rateSupported: Boolean,
                       turboSupported: Boolean, turboMode: String, onTurbo: (String) -> Unit) {
-    // GPU 最高频的一键开关；帧率档位完全由玩家单独选择，预设不碰它。
-    if (turboSupported) {
-        val maxPerformance = GpuTurbo.normalize(turboMode) == GpuTurbo.ON
-        ToggleRow(
-            Icons.Filled.Bolt,
-            stringResource(R.string.drawer_max_performance),
-            stringResource(R.string.drawer_max_performance_hint),
-            maxPerformance,
-        ) { on ->
-            val mode = if (on) GpuTurbo.ON else GpuTurbo.OFF
-            onTurbo(mode)
-        }
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-    }
     if (rateSupported) {
         GroupLabel(stringResource(R.string.drawer_group_rate))
         // 选项的词先取好：回调里不能取词
