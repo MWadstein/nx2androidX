@@ -369,6 +369,36 @@ The `sync-scan`, `sync-protect`, `sync-upload` and `sync-baseline` phases report
 
 Eligible transfer-only completion also reuses NVN CPU_UNCACHED baselines. Native cases cover coherent and simulated non-coherent memory, empty/disjoint writes, independent CPU changes, incremental and clean snapshot volume, and fallback-to-eligible transitions. The old exclusion fails these tests. This does not change CPU_UNCACHED merge coverage for uncertain submissions; their baselines are reused too (no full snapshot of the pool at the next sync).
 
+## Branches and worktrees
+
+Work happens on short-lived branches off `integration/main` in a worktree of its own
+(`D:/Projects/nx2androidx-worktrees/<name>`), so the main checkout stays usable for builds and the
+game dumps under `.gamedump/`. `integration/main` is the one long-lived line: it is what the APK is
+built from and what `myfork` receives.
+
+The rule has two halves, and the second is not optional: **a merged branch is deleted.** Merging is
+the moment the work stops needing a name of its own, and every branch that survives a merge is one
+more thing the next session has to read, check and decide about. The same goes for its worktree.
+
+After the merge:
+
+```
+git worktree remove <worktree>          # refuses when it holds uncommitted work: read it first
+git branch -d <branch>                  # -d, so git itself says "not fully merged" when unsure
+git branch -D <branch>                  # only for a branch whose patches are in main under other
+                                        # commits (git cherry integration/main <branch> shows none)
+```
+
+A worktree can contain reparse points; check before any recursive delete (`Get-ChildItem -Recurse
+-Force | Where-Object LinkType`, or `find <dir> -type l` on macOS) and never delete a directory that
+holds one with `-r` / `/s`. On Windows a deep `node_modules` or Gradle cache can exceed the path
+limit and make `git worktree remove` fail after git has already forgotten the worktree; the
+directory is then orphaned and can be emptied with `robocopy <empty> <dir> /MIR /XJ` before `rd /s /q`.
+
+Branches that are kept on purpose are named for it: `recovery/<what>` is a known-good state kept for
+A/B comparison, and the note beside it says which build it is. A branch that only exists because
+nobody decided is not a decision.
+
 ## Commit messages
 
 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/), with commitlint's `config-conventional` types and limits:
