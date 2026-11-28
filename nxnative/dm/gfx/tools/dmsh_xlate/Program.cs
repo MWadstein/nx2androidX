@@ -96,13 +96,11 @@ static class SwshXlate
         public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
         // An address past the code is no code: FindBrxTargetsAmpere ends a jump table on it when the words after the table are not code offsets (Yoshi and the Mysterious Book's 23e73eaf528c9c0b, whose slice threw)
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => address >= (ulong)_code.Length ? default : MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
-        // A texture read whose handle the translator cannot trace to one slot indexes the texture and sampler pools by the handle's IDs (20 and 12 bits); dmsh_build.py turns these
-        // arrays into pointers to the pools the replay keeps (pool_arrays), with a run-time bound, so the lengths are the whole ID ranges
-        public int QuerySamplerArrayLengthFromPool() => 1 << 12;
-        // c[2]: every handle word (C2HandleWords). EA SPORTS FC 27's lights index separate texture i as element 45 + i (c2 byte 0x168 + 8 i), which 32 elements clamped to element 31.
-        // Other buffers (the game's own uniform buffers, read through the handles' byte offsets as well) keep 32
-        public int QueryTextureArrayLengthFromBuffer(int slot) => slot == 2 ? C2HandleWords : 32;
-        public int QueryTextureArrayLengthFromPool() => 1 << 20;
+        // Maxwell Android replay binds its dynamic texture/sampler arrays slot by slot (32 entries). NVN2 keeps whole ID-range pools and may use every c[2] handle word.
+        // Keep the old Maxwell limits even when the shared Ampere-capable translator is used; otherwise the reflection describes arrays the Android replay never binds.
+        public int QuerySamplerArrayLengthFromPool() => (string)_job["arch"] == "sm86" ? 1 << 12 : 32;
+        public int QueryTextureArrayLengthFromBuffer(int slot) => (string)_job["arch"] == "sm86" && slot == 2 ? C2HandleWords : 32;
+        public int QueryTextureArrayLengthFromPool() => (string)_job["arch"] == "sm86" ? 1 << 20 : 32;
 
         string Get(string table, int slot) => _job[table] is JsonObject t && t[slot.ToString()] is JsonNode n ? (n is JsonObject o ? (string)o["type"] : (string)n) : null;
         // A handle's texture or image slot, numbered as dmsh_build.py decode_tex numbers the reflection's (so an answer table row names the slot the reflection shows): the handle ORs two
@@ -167,6 +165,21 @@ static class SwshXlate
         // cannot supply the native NV geometry-passthrough stage afterwards.
         // Job gs_passthrough = false (the Android Vulkan build, vk_android_build.py): the device has no SPV_NV_geometry_shader_passthrough, so the shader writes its vertices itself
         public bool QueryHostSupportsGeometryShaderPassthrough() => _job["geometry_topology"] == null && !(_job["gs_passthrough"] is JsonNode gp && !(bool)gp);
+        public int QueryGeometryPassthroughAttributeMask() => _job["gs_passthrough_mask"] is JsonNode n ? (int)n : 0xffff;
+        // Android renders viewport zero without VK_NV_viewport_array2; Apple jobs retain native mask metadata.
+        public bool QueryHostSupportsViewportMask() => !(_job["viewport_mask"] is JsonNode n && !(bool)n);
+        // Job "render_scale" = false (the Android chain, whose support buffer holds 1.0 in every render scale:
+        // gfx_vk_shader.c): no TexelFetchScale / TextureSizeUnscale helpers. Their branch at each texel fetch
+        // made the Adreno 830 compiler fail on Fire Emblem: Three Houses' particle compute shaders (TexturePass.cs).
+        public bool QueryHostSupportsRenderScale() => !(_job["render_scale"] is JsonNode n && !(bool)n);
+        JsonObject Xfb(int b) => _job["xfb"] is JsonArray a && b < a.Count ? a[b] as JsonObject : null;
+        public bool QueryTransformFeedbackEnabled() => _job["xfb"] != null;
+        public ReadOnlySpan<byte> QueryTransformFeedbackVaryingLocations(int bufferIndex)
+        {
+            if (Xfb(bufferIndex)?["words"] is not JsonArray w) return Array.Empty<byte>();
+            byte[] r = new byte[w.Count]; for (int i = 0; i < r.Length; i++) r[i] = (byte)(int)w[i]; return r;
+        }
+        public int QueryTransformFeedbackStride(int bufferIndex) => Xfb(bufferIndex)?["stride"] is JsonNode s ? (int)s : 0;
         // Host answers only the Android Vulkan build sets (vk_android_build.py; android/SHADERS.md); a job without them gets Ryujinx's defaults, which the Apple libraries are built with.
         // Job subgroup_size: the device's fixed subgroup size (Adreno: 64). Maxwell code assumes 32-lane warps; with 64 Ryujinx splits ballots, masks and shuffles into 32-lane halves (InstEmitWarp, HelperFunctionManager)
         // Job shared_max: the device's maxComputeSharedMemorySize (DMSH_VK_SHARED_MAX). A compute program declaring more keeps its shared memory in a storage buffer, a slice per

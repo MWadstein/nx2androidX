@@ -938,12 +938,10 @@ namespace Ryujinx.Graphics.Shader.Instructions
                         // The instruction component order is the inverse of GLSL's.
                         Operand res = context.Lod(type, flags, setAndBinding, compIndex ^ 1, sources);
 
-                        res = context.FPMultiply(res, ConstF(256.0f));
+                        // Banana Native: unsigned 24.8 with a negative LOD clamped to 0, as Maxwell returns it (yuzu #10234; nx2android: Tears of the Kingdom's cloud particles)
+                        res = context.FPMultiply(context.FPMaximum(res, ConstF(0.0f)), ConstF(256.0f));
 
-                        // nxnative: unsigned 24.8, a negative LOD (a magnified texture) clamped to 0, as Maxwell returns it (yuzu #10234 converts both
-                        // components to unsigned; the TOTKDroid port found Tears of the Kingdom's cloud particles reading a negative LOD as a huge unsigned one).
-                        // 2,827 of its pixel shaders use TMML; the Great Sky Island frames checked looked the same either way
-                        Operand fixedPointValue = context.FP32ConvertToU32(context.FPMaximum(res, ConstF(0.0f)));
+                        Operand fixedPointValue = context.FP32ConvertToU32(res);
 
                         context.Copy(d, fixedPointValue);
                     }

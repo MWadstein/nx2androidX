@@ -12,6 +12,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 {
     static class Declarations
     {
+        // nxnative: where LDTRAM's per-vertex inputs start (UserDefinedPerVertex), past every attribute location (32)
+        public const int PerVertexLocationBase = 64;
+
         public static void DeclareParameters(CodeGenContext context, StructuredFunction function)
         {
             DeclareParameters(context, function.InArguments, 0);
@@ -50,6 +53,56 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             DeclareSamplers(context, context.Properties.Textures.Values);
             DeclareImages(context, context.Properties.Images.Values);
             DeclareInputsAndOutputs(context, info);
+
+            if (context.Properties.SharedSpill != null)
+            {
+                DeclareSharedSpill(context, context.Properties.SharedSpill);
+            }
+        }
+
+        // nxnative: shared memory in a storage buffer (StructuredIr/SharedSpillInfo.cs). The buffer is Coherent: other invocations of the workgroup read what one wrote after a
+        // barrier, which then orders uniform (storage buffer) memory as well (Instructions.GenerateBarrier). WorkgroupId (the shader's own when it reads it: a builtin may be in
+        // the interface once) and NumWorkgroups give the workgroup's linear index; GenerateSharedSpillBase turns it into the slice base at the start of main
+        private static void DeclareSharedSpill(CodeGenContext context, SharedSpillInfo spill)
+        {
+            context.Decorate(context.StorageBuffers[spill.Binding], Decoration.Coherent);
+
+            IoDefinition workgroupId = new(StorageKind.Input, IoVariable.CtaId);
+
+            if (!context.Inputs.ContainsKey(workgroupId))
+            {
+                DeclareInputOrOutput(context, workgroupId, isOutput: false, isPerPatch: false);
+            }
+
+            SpvInstruction numWorkgroups = context.Variable(context.TypePointer(StorageClass.Input, context.TypeVector(context.TypeU32(), 3)), StorageClass.Input);
+            context.Decorate(numWorkgroups, Decoration.BuiltIn, (LiteralInteger)BuiltIn.NumWorkgroups);
+            context.Name(numWorkgroups, "dm_num_workgroups");
+            context.AddGlobalVariable(numWorkgroups);
+            context.ExtraInterface.Add(numWorkgroups);
+
+            context.SharedSpillBase = context.Variable(context.TypePointer(StorageClass.Private, context.TypeU32()), StorageClass.Private);
+            context.Name(context.SharedSpillBase, "dm_shared_spill_base");
+            context.AddGlobalVariable(context.SharedSpillBase);
+        }
+
+        // nxnative: this workgroup's slice of the shared memory spill buffer, stored in the Private word every access adds (Instructions.GetStoragePointer): slice
+        // (linear workgroup index mod the slices the bound buffer holds) * words. Called at the start of main
+        public static void GenerateSharedSpillBase(CodeGenContext context, SharedSpillInfo spill)
+        {
+            SpvInstruction u32 = context.TypeU32();
+            SpvInstruction uvec3 = context.TypeVector(u32, 3);
+            SpvInstruction id = context.Load(uvec3, context.Inputs[new IoDefinition(StorageKind.Input, IoVariable.CtaId)]);
+            SpvInstruction count = context.Load(uvec3, context.ExtraInterface[0]);
+            SpvInstruction X(SpvInstruction v, int i) => context.CompositeExtract(u32, v, (LiteralInteger)i);
+
+            SpvInstruction linear = context.IAdd(u32, context.IMul(u32, context.IAdd(u32, context.IMul(u32, X(id, 2), X(count, 1)), X(id, 1)), X(count, 0)), X(id, 0));
+            SpvInstruction words = context.Constant(u32, spill.Words);
+            SpvInstruction slices = context.UDiv(u32, context.ArrayLength(u32, context.StorageBuffers[spill.Binding], (LiteralInteger)0), words);
+            SpvInstruction one = context.Constant(u32, 1);
+
+            slices = context.Select(u32, context.ULessThan(context.TypeBool(), slices, one), one, slices);   // a buffer under one slice (not bound right): no division by 0
+
+            context.Store(context.SharedSpillBase, context.IMul(u32, context.UMod(u32, linear, slices), words));
         }
 
         private static void DeclareMemories(
@@ -60,13 +113,31 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         {
             foreach ((int id, MemoryDefinition memory) in memories)
             {
-                SpvInstruction pointerType = context.TypePointer(storage, context.GetType(memory.Type, memory.ArrayLength));
-                SpvInstruction variable = context.Variable(pointerType, storage);
+                if (storage == StorageClass.Workgroup && context.Properties.SharedSpill?.MemoryId == id)
+                {
+                    continue;   // nxnative: in the spill buffer instead (DeclareSharedSpill)
+                }
+
+                StorageClass memoryStorage = SharedStorageClass(storage, memory);
+                // nxnative: an array type of its own. The generator reuses an identical type, so a memory of 8 words took the support buffer's uint[8], which carries
+                // ArrayStride 16, and Workgroup / Private memory may have no explicit layout (Vulkan's VUID-StandaloneSpirv-None-10684: Orbitals, 24 compute shaders)
+                SpvInstruction type = (memory.Type & AggregateType.Array) != 0 && memory.ArrayLength > 0
+                    ? context.TypeArray(context.GetType(memory.Type & ~AggregateType.Array), context.Constant(context.TypeU32(), memory.ArrayLength), forceIdAllocation: true)
+                    : context.GetType(memory.Type, memory.ArrayLength);
+                SpvInstruction pointerType = context.TypePointer(memoryStorage, type);
+                SpvInstruction variable = context.Variable(pointerType, memoryStorage, memory.ZeroInit ? context.ConstantNull(type) : null);
 
                 context.AddGlobalVariable(variable);
 
                 dict.Add(id, variable);
             }
+        }
+
+        // nxnative (after azmasm/switch2mac, MIT): a Switch 2 task / mesh program's task memory (StructuredIr/MeshShaderInfo.cs) is the task payload a task writes and its mesh
+        // workgroups read
+        public static StorageClass SharedStorageClass(StorageClass storage, MemoryDefinition memory)
+        {
+            return storage == StorageClass.Workgroup && memory.Name == MeshShaderInfo.PayloadName ? StorageClass.TaskPayloadWorkgroupEXT : storage;
         }
 
         private static void DeclareConstantBuffers(CodeGenContext context, IEnumerable<BufferDefinition> buffers)
@@ -127,7 +198,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
                 if (decoratedTypes.Add(structType))
                 {
-                    context.Decorate(structType, isBuffer ? Decoration.BufferBlock : Decoration.Block);
+                    context.Decorate(structType, isBuffer && context.BufferStorageClass(true) == StorageClass.Uniform ? Decoration.BufferBlock : Decoration.Block);
 
                     for (int fieldIndex = 0; fieldIndex < structFieldOffsets.Length; fieldIndex++)
                     {
@@ -135,8 +206,8 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                     }
                 }
 
-                SpvInstruction pointerType = context.TypePointer(StorageClass.Uniform, structType);
-                SpvInstruction variable = context.Variable(pointerType, StorageClass.Uniform);
+                SpvInstruction pointerType = context.TypePointer(context.BufferStorageClass(isBuffer), structType);
+                SpvInstruction variable = context.Variable(pointerType, context.BufferStorageClass(isBuffer));
 
                 context.Name(variable, buffer.Name);
                 context.Decorate(variable, Decoration.DescriptorSet, (LiteralInteger)setIndex);
@@ -225,6 +296,8 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
         private static void DeclareImages(CodeGenContext context, IEnumerable<TextureDefinition> images)
         {
+            bool extendedFormats = false;
+
             foreach (TextureDefinition image in images)
             {
                 int setIndex = context.TargetApi == TargetApi.Vulkan ? image.Set : 0;
@@ -237,6 +310,13 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 }
 
                 Dim dim = GetDim(image.Type);
+
+                // nxnative: the rg32ui image of a 64-bit image atomic (Instructions.GenerateImageAtomic) is an extended storage format in SPIR-V (PR #1801)
+                if (context.HostCapabilities.MetalImageAtomics && image.Format == TextureFormat.R32G32Uint && !extendedFormats)
+                {
+                    extendedFormats = true;
+                    context.AddCapability(Capability.StorageImageExtendedFormats);
+                }
 
                 SpvInstruction imageType = context.TypeImage(
                     context.GetType(image.Format.GetComponentType()),
@@ -364,6 +444,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                     if (ioVariable == IoVariable.UserDefined)
                     {
                         iq = context.Definitions.ImapTypes[ioDefinition.Location].GetFirstUsedType();
+                    }
+                    else if (ioVariable == IoVariable.UserDefinedPerVertex)
+                    {
+                        iq = PixelImap.Constant;   // nxnative: a vertex's own word, not interpolated (LDTRAM)
                     }
                     else
                     {
@@ -511,6 +595,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 varType = context.Definitions.GetUserDefinedType(ioDefinition.Location, isOutput);
                 isBuiltIn = false;
             }
+            else if (ioVariable == IoVariable.UserDefinedPerVertex)   // nxnative: LDTRAM's inputs, the words of a vec4 (an attribute's four words are untyped)
+            {
+                varType = AggregateType.Vector4 | AggregateType.FP32;
+                isBuiltIn = false;
+            }
             else if (ioVariable == IoVariable.FragmentOutputColor)
             {
                 varType = context.Definitions.GetFragmentOutputColorType(ioDefinition.Location);
@@ -613,6 +702,13 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 {
                     context.Decorate(spvVar, Decoration.PassthroughNV);
                 }
+            }
+            else if (ioVariable == IoVariable.UserDefinedPerVertex)
+            {
+                // nxnative: one input for each vertex of the attribute, at locations past the attributes' own, named for dmsh_rewrite.per_vertex (SPIRV-Cross has no MSL
+                // form of PerVertexKHR): it makes the three of location L one vertex_value<float4> at user(locnL), the vertex shader's output there
+                context.Decorate(spvVar, Decoration.Location, (LiteralInteger)(PerVertexLocationBase + ioDefinition.Location));
+                context.Name(spvVar, $"dm_pv{ioDefinition.Location / 3}_{ioDefinition.Location % 3}");
             }
             else if (ioVariable == IoVariable.FragmentOutputColor)
             {

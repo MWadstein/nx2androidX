@@ -23,6 +23,9 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
         {
             StructuredProgramContext context = new(attributeUsage, definitions, resourceManager, nativeGeometryPassthrough, debugMode);
 
+            // nxnative: which functions run subgroup operations (themselves or in a callee), for LoopExitCohort
+            bool[] subgroupFunctions = LoopExitCohort.SubgroupFunctions(functions);
+
             for (int funcIndex = 0; funcIndex < functions.Count; funcIndex++)
             {
                 Function function = functions[funcIndex];
@@ -71,6 +74,8 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 
                 GotoElimination.Eliminate(context.GetGotos());
 
+                LoopExitCohort.Apply(context.CurrentFunction.MainBlock, callee => callee >= 0 && callee < subgroupFunctions.Length && subgroupFunctions[callee]);
+
                 AstOptimizer.Optimize(context, targetLanguage);
 
                 context.LeaveFunction();
@@ -110,6 +115,15 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 else if (storageKind == StorageKind.ConstantBuffer && operation.GetSource(0).Type == OperandType.Constant)
                 {
                     context.ResourceManager.SetUsedConstantBufferBinding(operation.GetSource(0).Value);
+
+                    // nxnative: uniform bounds
+                    if (inst == Instruction.Load && operation.SourcesCount == 4)
+                    {
+                        Operand vec = operation.GetSource(2), elem = operation.GetSource(3);
+                        bool fixedOffset = vec.Type == OperandType.Constant && elem.Type == OperandType.Constant;
+
+                        context.ResourceManager.NoteUniformRead(operation.GetSource(0).Value, fixedOffset, fixedOffset ? vec.Value * 4 + elem.Value : 0);
+                    }
                 }
             }
 
@@ -170,6 +184,11 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 
             AstTextureOperation GetAstTextureOperation(TextureOperation texOp)
             {
+                if ((texOp.Type & SamplerType.Mask) == SamplerType.TextureBuffer)
+                {
+                    context.ResourceManager.NoteBufferResource(inst.IsImage(), texOp.Set, texOp.Binding);   // nxnative: buffer image and buffer texture offsets
+                }
+
                 return new AstTextureOperation(
                     inst,
                     texOp.Type,

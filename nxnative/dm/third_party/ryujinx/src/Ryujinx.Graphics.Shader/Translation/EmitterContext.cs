@@ -22,6 +22,9 @@ namespace Ryujinx.Graphics.Shader.Translation
         public Block CurrBlock { get; set; }
         public InstOp CurrOp { get; set; }
 
+        // nxnative: the last Operation.GlobalVectorGroup handed out (InstEmitAmpereMem.ALdg, InstEmitMemory.EmitLoad); 0 is no vector access
+        public int GlobalVectorGroups { get; set; }
+
         public int OperationsCount => _operations.Count;
 
         private readonly struct BrxTarget
@@ -215,6 +218,11 @@ namespace Ryujinx.Graphics.Shader.Translation
             _operations.Add(operation);
         }
 
+        // The Ampere frontend's scoreboard model rewrites an instruction's operations after emitting them (Translator.EmitOpsAmpere)
+        internal Operation GetOperation(int index) => _operations[index];
+
+        internal void InsertOperation(int index, Operation operation) => _operations.Insert(index, operation);
+
         public void MarkLabel(Operand label)
         {
             Add(Instruction.MarkLabel, label);
@@ -399,15 +407,6 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                 if (TranslatorContext.Definitions.GpPassthrough && !TranslatorContext.GpuAccessor.QueryHostSupportsGeometryShaderPassthrough())
                 {
-                    // A passthrough GS has one mask for its whole input primitive. On a single-viewport
-                    // host without NV viewport masks, emit that primitive only when viewport zero is enabled.
-                    Operand maskedEnd = null;
-                    if (!TranslatorContext.GpuAccessor.QueryHostSupportsViewportMask() && (Program.UsedFeatures & FeatureFlags.ViewportMask) != 0)
-                    {
-                        maskedEnd = Label();
-                        Operand mask = this.Load(StorageKind.Output, IoVariable.ViewportMask, null, Const(0));
-                        this.BranchIfTrue(maskedEnd, this.ICompareEqual(this.BitwiseAnd(mask, Const(1)), Const(0)));
-                    }
                     int inputStart, inputEnd, inputStep;
 
                     InputTopology topology = TranslatorContext.Definitions.InputTopology;
@@ -431,11 +430,34 @@ namespace Ryujinx.Graphics.Shader.Translation
                         inputStep = 1;
                     }
 
+                    // A passthrough GS has one mask for its whole input primitive. Preserve the
+                    // single-viewport software path while also allowing a host that supports NV
+                    // viewport masks to let the hardware drop primitives whose mask is zero.
+                    Operand maskedEnd = null;
+                    Operand lblCulled = null;
+
+                    if (!TranslatorContext.GpuAccessor.QueryHostSupportsViewportMask() && (Program.UsedFeatures & FeatureFlags.ViewportMask) != 0)
+                    {
+                        maskedEnd = Label();
+                        Operand mask = this.Load(StorageKind.Output, IoVariable.ViewportMask, null, Const(0));
+                        this.BranchIfTrue(maskedEnd, this.ICompareEqual(this.BitwiseAnd(mask, Const(1)), Const(0)));
+                    }
+
+                    if (TranslatorContext.UsesViewportMask && TranslatorContext.GpuAccessor.QueryHostSupportsViewportMask())
+                    {
+                        lblCulled = Label();
+                        this.BranchIfTrue(lblCulled, this.ICompareEqual(this.Load(StorageKind.Output, IoVariable.ViewportMask, null, Const(0)), Const(0)));
+                    }
+
                     for (int primIndex = inputStart; primIndex < inputEnd; primIndex += inputStep)
                     {
                         WritePositionOutput(primIndex);
 
-                        int passthroughAttributes = TranslatorContext.AttributeUsage.PassthroughAttributes;
+                        // Fixed-input stages preserve the complete Maxwell attribute map.
+                        // The reader may consume generic slots above location 15.
+                        int passthroughAttributes = TranslatorContext.GpuAccessor.QueryGeometryInputFixed()
+                            ? ~TranslatorContext.AttributeUsage.UsedOutputAttributes
+                            : TranslatorContext.AttributeUsage.PassthroughAttributes;
                         while (passthroughAttributes != 0)
                         {
                             int index = BitOperations.TrailingZeroCount(passthroughAttributes);
@@ -447,7 +469,16 @@ namespace Ryujinx.Graphics.Shader.Translation
                     }
 
                     this.EndPrimitive();
-                    if (maskedEnd != null) MarkLabel(maskedEnd);
+
+                    if (maskedEnd != null)
+                    {
+                        this.MarkLabel(maskedEnd);
+                    }
+
+                    if (lblCulled != null)
+                    {
+                        this.MarkLabel(lblCulled);
+                    }
                 }
             }
             else if (TranslatorContext.Definitions.Stage == ShaderStage.Fragment)

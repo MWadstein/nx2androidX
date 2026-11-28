@@ -22,6 +22,80 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// Size in bytes of the constant buffer 1 data the host knows (an Ampere jump table ends there at the latest).
+        /// </summary>
+        int QueryConstantBuffer1Size()
+        {
+            return 0;
+        }
+
+        /// <summary>
+        /// NVN2 (Switch 2) compute shaders: the counts of the shader's own driver constant layout in c[0] (uniform buffer entries, storage buffer entries, texture
+        /// handles), its size and the bytes of its push constants, from the control section; null for other shaders.
+        /// </summary>
+        int[] QueryAmpereComputeC0Layout()
+        {
+            return null;
+        }
+
+        /// <summary>
+        /// nxnative: whether the host binds a storage buffer from an address it reads in a bank other than c[0]'s storage entries, decoding a bindless constant
+        /// buffer handle where the shader takes the address as handle << 4 and reading the push constants (c[24]) (Metal: nvn_mtl.m NVN_RB_SBUFU / NVN_RB_SBUFQ). When it
+        /// does not (Android: its storage kinds are c[0]'s slots and addresses in a game uniform buffer), such accesses go through the memory pool table instead (GlobalToStorage).
+        /// </summary>
+        bool QueryHostStorageHandles()
+        {
+            return false;
+        }
+
+        /// <summary>
+        /// NVN2 (Switch 2) graphics stages: the stage's own constant bank, c[25 + stage index], which holds the buffer entries the game pushes into graphics push block
+        /// 1 + stage index; the translator maps it onto that block of c[24] (AStageBlock). -1 for other shaders.
+        /// </summary>
+        int QueryAmpereStageBank()
+        {
+            return -1;
+        }
+
+        /// <summary>
+        /// NVN2 (Switch 2) task and mesh shaders, translated as compute (upstream's Metal path): the byte offsets in shared memory of the stage memory the build reads back
+        /// (dmsh_meshstage.py): the workgroup's number, the stage input (a task's payload), the outputs (a payload, or a mesh shader's attributes) and a mesh shader's
+        /// primitive bytes; null for other shaders, and for the native task / mesh programs of TranslationFlags.TaskShader / MeshShader.
+        /// </summary>
+        int[] QueryAmpereStageMemory()
+        {
+            return null;
+        }
+
+        /// <summary>
+        /// nxnative (after azmasm/switch2mac, MIT): the layout of a Switch 2 task / mesh program (TranslationFlags.TaskShader / MeshShader): max vertices, max primitives,
+        /// task memory (payload) bytes, then the per-vertex planes (0-3 position x y z w, 4 + 4 g + c generic g component c), optionally -1 and the per-primitive values,
+        /// optionally -2 and generic locations to declare unwritten (StructuredIr/MeshShaderInfo.cs).
+        /// </summary>
+        int[] QueryMeshShaderLayout()
+        {
+            return null;
+        }
+
+        /// <summary>
+        /// nxnative: the vertices per output primitive of a Switch 2 mesh program (its control section's +0x5f; shader_split.py mesh_facts "mesh_topology"):
+        /// 3 triangles, 1 points (StructuredIr/MeshShaderInfo.cs).
+        /// </summary>
+        int QueryMeshShaderTopology()
+        {
+            return 3;
+        }
+
+        /// <summary>
+        /// nxnative: the SpecId of a bool specialization constant under which a Switch 2 mesh program rewrites its positions' depth to the GL convention
+        /// (z' = z / 2 + w / 2, near = -w, NVN's default) before it hands them over; -1 for none.
+        /// </summary>
+        int QueryMeshShaderGlDepthSpecId()
+        {
+            return -1;
+        }
+
+        /// <summary>
         /// Gets a span of the specified memory location, containing shader code.
         /// </summary>
         /// <param name="address">GPU virtual address of the data</param>
@@ -111,6 +185,23 @@ namespace Ryujinx.Graphics.Shader
         int QueryComputeSharedMemorySize()
         {
             return 0xc000;
+        }
+
+        /// <summary>
+        /// nxnative: the host's limit of shared memory a compute workgroup may declare, in bytes; 0 = no limit. A program whose shared memory (with the translator's own HMMA
+        /// scratch) is over it keeps its main shared memory in a storage buffer (StructuredIr/SharedSpillInfo.cs).
+        /// </summary>
+        int QueryHostComputeSharedMemoryMax()
+        {
+            return 0;
+        }
+
+        /// <summary>
+        /// nxnative: told when a compute program's shared memory moved to a storage buffer: the bytes of one workgroup's slice, and the bytes left in workgroup memory
+        /// (the HMMA scratch).
+        /// </summary>
+        void RecordSharedSpill(int sliceBytes, int workgroupBytes)
+        {
         }
 
         /// <summary>

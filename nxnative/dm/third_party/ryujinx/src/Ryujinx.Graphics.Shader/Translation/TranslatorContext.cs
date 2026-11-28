@@ -36,6 +36,8 @@ namespace Ryujinx.Graphics.Shader.Translation
 
         private bool IsTransformFeedbackEmulated => !GpuAccessor.QueryHostSupportsTransformFeedback() && GpuAccessor.QueryTransformFeedbackEnabled();
         public bool HasStore => _program.UsedFeatures.HasFlag(FeatureFlags.Store) || (IsTransformFeedbackEmulated && Definitions.LastInVertexPipeline);
+        internal bool UsesViewportMask => _program.UsedFeatures.HasFlag(FeatureFlags.ViewportMask);
+        internal bool UsesDirectCbe => _program.UsedFeatures.HasFlag(FeatureFlags.DirectCbe);   // nxnative: DirectCbeWrites
 
         public bool LayerOutputWritten { get; private set; }
         public int LayerOutputAttribute { get; private set; }
@@ -159,8 +161,21 @@ namespace Ryujinx.Graphics.Shader.Translation
 
         internal int GetDepthRegister()
         {
-            // The depth register is always two registers after the last color output.
-            return BitOperations.PopCount((uint)Definitions.OmapTargets) + 1;
+            // The colour outputs take four registers for each render target with any component enabled, a component in its own slot of the four
+            // (EmitterContext.PrepareForReturn's loop), and the depth is two registers after the last of them: 4 x (enabled targets) + 1. Upstream counted
+            // components (PopCount(OmapTargets) + 1), which is that only when every enabled target writes all four: with OmapTargets 0x100 (RT2 R) the depth
+            // is R5 and the count read R2 (docs/reference/shaders.md#a-pixel-shader-with-partial-colour-masks-wrote-the-wrong-depth).
+            int targets = 0;
+
+            for (int rt = 0; rt < 8; rt++)
+            {
+                if ((Definitions.OmapTargets & (0xf << (rt * 4))) != 0)
+                {
+                    targets++;
+                }
+            }
+
+            return targets * 4 + 1;
         }
 
         public void SetLayerOutputAttribute(int attr)
@@ -206,6 +221,13 @@ namespace Ryujinx.Graphics.Shader.Translation
 
             ResourceManager resourceManager = CreateResourceManager(asCompute);
 
+            // nxnative: a Switch 2 task / mesh program's stage memories, declared before any instruction is emitted (Instructions/InstEmitAmpereMesh.cs)
+            if (MeshShaderInfo.Create(Options.Flags, GpuAccessor) is MeshShaderInfo mesh)
+            {
+                resourceManager.Properties.Mesh = mesh;
+                mesh.Declare(resourceManager.Properties);
+            }
+
             bool usesLocalMemory = _program.UsedFeatures.HasFlag(FeatureFlags.LocalMemory);
 
             resourceManager.SetCurrentLocalMemory(_localMemorySize, usesLocalMemory);
@@ -219,7 +241,47 @@ namespace Ryujinx.Graphics.Shader.Translation
 
             FunctionCode[] code = EmitShader(this, resourceManager, _program, asCompute, initializeOutputs: true, out _);
 
+            if (Stage == ShaderStage.Compute && resourceManager.Properties.Mesh == null)
+            {
+                SpillSharedMemory(resourceManager);
+            }
+
             return Translate(code, resourceManager, _program.UsedFeatures, _program.ClipDistancesWritten, asCompute);
+        }
+
+        // nxnative: shared memory past the host's limit (StructuredIr/SharedSpillInfo.cs). Decided after the instructions were emitted, when the HMMA scratch (which stays in
+        // workgroup memory) is known: the program's main shared memory moves when it alone, or with that scratch, is over the limit
+        private void SpillSharedMemory(ResourceManager resourceManager)
+        {
+            int max = GpuAccessor.QueryHostComputeSharedMemoryMax();
+            int id = resourceManager.SharedMemoryId;
+
+            if (max <= 0 || id < 0)
+            {
+                return;
+            }
+
+            int words = resourceManager.Properties.SharedMemories[id].ArrayLength;
+            int total = 0;
+
+            foreach (MemoryDefinition memory in resourceManager.Properties.SharedMemories.Values)
+            {
+                total += memory.ArrayLength * sizeof(uint);
+            }
+
+            if (total <= max)
+            {
+                return;
+            }
+
+            if (!resourceManager.TryGetStorageBufferBinding(GlobalToStorage.GmemMapCbSlot, GlobalToStorage.SharedSpillCbOffset, write: true, out int binding))
+            {
+                throw new InvalidOperationException($"Shared memory of {total} bytes is over the host's {max} and no storage buffer binding is left for it.");
+            }
+
+            resourceManager.Properties.SharedSpill = new SharedSpillInfo(id, binding, words);
+            GpuAccessor.RecordSharedSpill(words * sizeof(uint), total - words * sizeof(uint));
+            GpuAccessor.Log($"shared memory of {words * sizeof(uint)} bytes moved to a storage buffer slice per workgroup ({total} bytes in all, the host's limit {max})");
         }
 
         public ShaderProgram Translate(TranslatorContext other, bool asCompute = false)
@@ -308,6 +370,7 @@ namespace Ryujinx.Graphics.Shader.Translation
                         Options.TargetApi,
                         Options.TargetLanguage,
                         Definitions.Stage,
+                        Options.Flags.HasFlag(TranslationFlags.Ampere),
                         ref usedFeatures);
 
                     Optimizer.RunPass(context);
@@ -316,6 +379,11 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                 funcs[i] = new Function(cfg.Blocks, $"fun{i}", false, inArgumentsCount, outArgumentsCount);
             }
+
+            // nxnative: after the lowering passes, on the shared memory accesses the code generator will see, with every function translated (a call follows its callee)
+            SharedMemoryFence.RunPass(funcs, functions.Length, hfm, Definitions.Stage, usedFeatures);
+
+            resourceManager.UnifyArrayTypes(funcs);   // nxnative
 
             return Generate(
                 funcs,
@@ -378,7 +446,8 @@ namespace Ryujinx.Graphics.Shader.Translation
                 GpuAccessor.QueryHostSupportsShaderFloat64(),
                 GpuAccessor.QueryHostSupportsShaderNonUniformIndexing(),
                 GpuAccessor.QueryHostSupportsTextureShadowLod(),
-                GpuAccessor.QueryHostSupportsViewportMask());
+                GpuAccessor.QueryHostSupportsViewportMask(),
+                Options.Flags.HasFlag(TranslationFlags.MetalImageAtomics));
 
             CodeGenParameters parameters = new CodeGenParameters(attributeUsage, definitions, resourceManager.Properties, hostCapabilities, GpuAccessor, Options.TargetApi);
 
@@ -393,6 +462,10 @@ namespace Ryujinx.Graphics.Shader.Translation
         private ResourceManager CreateResourceManager(bool vertexAsCompute)
         {
             ResourceManager resourceManager = new(Definitions.Stage, GpuAccessor, GetResourceReservations());
+
+            resourceManager.UniformBounds = Options.Flags.HasFlag(TranslationFlags.MetalUniformBounds);   // nxnative: before any uniform slot gets its binding
+            resourceManager.BufferImageBias = Options.Flags.HasFlag(TranslationFlags.MetalBufferImageBias);   // nxnative: see ResourceManager.NoteBufferImage
+            resourceManager.StorageBounds = Options.Flags.HasFlag(TranslationFlags.MetalStorageBounds);   // nxnative: before any storage buffer gets its binding
 
             if (IsTransformFeedbackEmulated)
             {
