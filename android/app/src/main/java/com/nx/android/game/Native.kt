@@ -20,6 +20,9 @@ object Native {
     @JvmStatic external fun start(pack: String, internal: String, titleId: String?, dpi: Int, env: Array<String>, ctx: Context): Boolean
     @JvmStatic external fun setSurface(surface: Surface?)
 
+    /** done in the high 32 bits, total in the low 32; -2 before replay starts, -1 when no warm-up is needed. */
+    @JvmStatic external fun prewarmStatus(): Long
+
     /**
      * 外接屏的画面：App 在接上的显示器（USB-C 的 DP 输出、扩展坞）上开一个 presentation，
      * 把它的 surface 交给宿主——游戏画到那里，手机（平板）自己变成手柄。

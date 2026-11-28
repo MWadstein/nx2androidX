@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -164,6 +165,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         /** the prepare runs on the process's own scope: an activity recreation does not kill it, and does not re-run it */
         private val prepareScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private var prepareJob: Job? = null
+        /** the first-run warm-up outlives an activity recreation, like the prepare does */
+        private val prewarmScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        private var prewarmJob: Job? = null
+        internal var prewarmDone by mutableStateOf(0); private set
+        internal var prewarmTotal by mutableStateOf(0); private set
 
         // ---- the prepare's states, process-level: the Loading page of whichever instance is current reads these ----
         internal var preparePhase by mutableStateOf(PreparePhase.IDLE); private set
@@ -232,6 +238,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     /** the game UI (surface, pad, drawer) is in the view tree: the native calls and the input paths are live */
     private var gameUiReady = false
     private lateinit var padView: PadView
+    private var gameFrame: FrameLayout? = null
+    private var prewarmOverlay: View? = null
 
     // 性能 HUD：两条线与它显示哪些字段（App 的偏好，重启后仍在）
     private var hudStats by mutableStateOf(false)
@@ -392,7 +400,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         forceRebuild = intent.getBooleanExtra(EXTRA_REBUILD, false)
         immersive()
         drawOverCutout()
-        if (hostRunning) { installGameUi(); setupExternalDisplay(); return }   // a recreation (the system rebuilt the activity): the running game takes the new window in surfaceCreated
+        if (hostRunning) {   // a recreation: the running game takes the new window, and an active warm-up keeps its overlay
+            installGameUi()
+            if (prewarmJob?.isActive == true) showPrewarmOverlay()
+            setupExternalDisplay()
+            return
+        }
         // 没带包的一条（resume 的自愈）：这个进程里没有正在跑的游戏，也没有准备在进行——
         // 它是「从不杀」模型下的清道夫，把幽灵进程收掉。
         if (packPath.isNullOrEmpty()) {
@@ -469,6 +482,22 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     }
                     PreparePhase.READY, PreparePhase.IDLE -> {}
                 }
+            }
+        }
+    }
+
+    /** An opaque layer over the game while recorded pipelines are checked and warmed. */
+    @Composable
+    private fun PrewarmOverlay() {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                Text(stringResource(R.string.prewarming_pipelines), color = Color.White,
+                     style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(16.dp))
+                if (prewarmTotal > 0) CircularProgressIndicator(color = NxPalette.Cream)
+                Spacer(Modifier.height(14.dp))
+                if (prewarmTotal > 0) Text(stringResource(R.string.prewarming_progress, prewarmDone, prewarmTotal),
+                     color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
@@ -594,6 +623,50 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         return null
     }
 
+    // ---- launch warm-up: an opaque layer over the game until recorded pipelines are checked ----
+
+    private fun showPrewarmOverlay() {
+        val frame = gameFrame ?: return
+        hidePrewarmOverlay()
+        val view = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@GameActivity)
+            setViewTreeViewModelStoreOwner(this@GameActivity)
+            setViewTreeSavedStateRegistryOwner(this@GameActivity)
+            setContent { NxTheme { ProvideAppLocale(locale) { PrewarmOverlay() } } }
+        }
+        frame.addView(view, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        prewarmOverlay = view
+    }
+
+    private fun hidePrewarmOverlay() {
+        prewarmOverlay?.let { view -> (view.parent as? FrameLayout)?.removeView(view) }
+        prewarmOverlay = null
+    }
+
+    private fun beginPrewarmWait() {
+        prewarmDone = 0; prewarmTotal = 0
+        prewarmJob?.cancel()
+        prewarmJob = prewarmScope.launch {
+            val deadline = SystemClock.elapsedRealtime() + 300_000L   // never hold the game hostage to a wedged driver
+            while (true) {
+                // -2: replay has not loaded the main module yet. Missing JNI (an old runtime) becomes -1.
+                val s = runCatching { Native.prewarmStatus() }.getOrDefault(-1L)
+                if (s == -2L) {
+                    if (SystemClock.elapsedRealtime() >= deadline) break
+                    delay(100)
+                    continue
+                }
+                if (s < 0L) break
+                val done = (s ushr 32).toInt(); val total = (s and 0xffffffffL).toInt()
+                withContext(Dispatchers.Main) { prewarmDone = done; prewarmTotal = total }
+                if (done >= total || SystemClock.elapsedRealtime() >= deadline) break
+                delay(100)
+            }
+            withContext(Dispatchers.Main) { currentInstance.get()?.hidePrewarmOverlay() }
+        }
+    }
+
     // ---- 开跑：加载宿主 → 游戏进视图树 → Native.start（全部在主线程上，SurfaceView 最后进）----
 
     private fun startGame(host: String) {
@@ -613,6 +686,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             return
         }
         installGameUi()
+        showPrewarmOverlay()   // opaque until recorded pipelines are checked (no-op on runtimes without it)
         val pack = packPath ?: return endProcess()
         val titleId = packTitleId
         // the title id keeps this game's saves, temp and log apart from the others' (host_start_common)
@@ -665,6 +739,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             return
         }
         hostRunning = true
+        beginPrewarmWait()   // keep the opaque layer up until recorded pipelines are checked
         // 手柄的显示与浓淡：App 的偏好是唯一真值，宿主只留运行时的副本（settings.txt 不再写这两项）
         runCatching { Native.padPrefs(padView.shown, padView.opacity) }
         // 手柄的映射表：每只手柄的档案推给宿主（老包没有那个入口，推不动就算了）
@@ -683,6 +758,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     /** 游戏的视图树：SurfaceView + 外接屏遮罩 + 手柄层 + 抽屉（准备完成才建——见类注释） */
     private fun installGameUi() {
         val frame = FrameLayout(this)
+        gameFrame = frame
         val surface = SurfaceView(this)
         surface.holder.addCallback(this)
         frame.addView(surface, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))

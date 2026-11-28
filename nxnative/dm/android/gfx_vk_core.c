@@ -147,8 +147,7 @@ static void driver_row(void) {
     else snprintf(g_vk_driver, sizeof g_vk_driver, "ID %04X %u.%u.%u", vid & 0xffff, d >> 22, d >> 12 & 0x3ff, d & 0xfff);
 }
 
-void vk_init(void) {
-    static int done; if (done) return; done = 1;
+static void vk_init_once(void) {
     // DM_VK_DRIVER=<library>: a Vulkan driver the APK carries (Mesa's Turnip for Adreno; porter --vulkan-driver), loaded through libadrenotools (BSD-2-Clause), which the
     // APK carries beside it with its hook libraries: a second copy of the system's loader in a linker namespace of its own, whose driver is this library. The loader keeps
     // making the surface and the swapchain, which Turnip on Android has none of (the platform loader makes them over VK_ANDROID_native_buffer). TOTKDroid, a port of Tears
@@ -379,6 +378,10 @@ void vk_init(void) {
     memlog_start();
     { void crash_handlers_check(const char *when); crash_handlers_check("after the Vulkan device was made"); }   // (again at present 600, gfx_vk_present.c: the shader compiler loads with the first pipelines)
     { void crash_install(void); crash_install(); crash_handlers_check("after the crash handlers were put back"); }   // the Vulkan driver resets the app's signal handlers to the default action right after the device is made (crash_handlers_check above): put ours back, so a fault in the host is reported instead of killing the process silently
+}
+void vk_init(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, vk_init_once);
 }
 // The driver loads its shader compiler with the first pipeline build, and it resets the app's signal handlers when it does (the Adreno 750's: the class of issue #64, the Fire Emblem: Three Houses case): the host's
 // handlers are put back after the device is made (above), and again after the first pipeline build, so a fault in the driver's compiler is reported instead of killing the process silently

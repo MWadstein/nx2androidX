@@ -608,6 +608,8 @@
     <string name="update_failed">检查失败：没有网络，或者够不着 release 页。</string>
     <string name="update_download">去下载</string>
     <string name="runtime_rebuilding">正在重建这个游戏的运行库，大约需要 1 分钟。</string>
+    <string name="prewarming_pipelines">正在准备游戏的图形管线。</string>
+    <string name="prewarming_progress">正在准备图形管线：%1$d / %2$d</string>
     <string name="runtime_rebuild_hint">若重建运行库后游戏闪退或异常，请使用原始游戏文件重新移植。</string>
     <string name="runtime_promoting">正在把这个包的运行库拷进 App 的私有目录。</string>
     <string name="runtime_update_failed">运行库更新失败。可重试，或在游戏详情里使用原始游戏文件重新移植；存档会保留。</string>

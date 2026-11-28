@@ -28,8 +28,11 @@ fix to apply.
 12: generic upstream host fixes reached the shared C core: movie inputs sent after EOS are returned without decoding,
 NVN host-lent command segments are sized by the request, and the audio update lock is read from UpdateImpl on SDK 19+.
 Installed runtimes need rebuilding so these fixes reach games.
+13: the Android host exposes recorded-pipeline warm-up progress after replay loads the main module, counts cached,
+rejected and async-pending records exactly once, and guards Vulkan/prewarm initialization with pthread_once.
+Installed runtimes need rebuilding so the loading overlay and the thread-safe warm-up path reach every game.
 """
-PLAYER_API_REVISION = 12
+PLAYER_API_REVISION = 13
 
 # The game profiles the player imports (a package of nxnative/dm/games/<title ID>/ folders) into their own folder: what the package was cut from.
 # PROFILES_REVISION counts the syncs of upstream's profiles (1: the first sync, seedds/nxnative at PROFILES_COMMIT); PROFILES_COMMIT is the upstream commit the

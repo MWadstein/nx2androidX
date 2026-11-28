@@ -610,6 +610,8 @@
     <string name="update_download">Get it</string>
     <string name="runtime_rebuilding">Rebuilding the game\'s runtime. This takes about a minute.</string>
     <string name="runtime_rebuild_hint">If the game crashes or misbehaves after this rebuild, port it again from its original files.</string>
+    <string name="prewarming_pipelines">Preparing the game\'s graphics before play.</string>
+    <string name="prewarming_progress">Warming pipelines: %1$d / %2$d</string>
     <string name="runtime_promoting">Copying the pack\'s runtime into the app\'s folder.</string>
     <string name="runtime_update_failed">The runtime could not be updated. Retry, or port the game again from its original files in the game\'s details. Your saves are kept.</string>
     <string name="runtime_play_failed">The game could not run correctly. You can try porting it again from its original files in game details. Your saves are kept.</string>

@@ -19,6 +19,7 @@ int dm_menu_export_note(char *out, int cap); int dm_menu_state(void);
 char *dm_pad_layout_json(void); char *dm_pad_state_json(void);
 void dm_audio_route_device(int32_t id);   // hle_audio.c: the live output streams move to that device at once
 int32_t dm_aaudio_get_device(void);       // audiotoolbox_aaudio.c: the output device in force (0 = the system's own)
+int vk_prewarm_status(int *done, int *total);
 #include <stdlib.h>
 #include <android/log.h>
 #include <android/native_window_jni.h>
@@ -286,6 +287,17 @@ JNIEXPORT jint JNICALL
 Java_com_nx_android_game_Native_frontCaps(JNIEnv *E, jclass c) {
     (void)E; (void)c;
     return dm_front_caps();
+}
+
+// The app polls while replay is still loading the game's main module. A runtime built before this entry has no status
+// API and raises UnsatisfiedLinkError, which the app treats as "no warm-up to wait for".
+JNIEXPORT jlong JNICALL
+Java_com_nx_android_game_Native_prewarmStatus(JNIEnv *E, jclass c) {
+    (void)E; (void)c;
+    int done = 0, total = 0;
+    int started = vk_prewarm_status(&done, &total);
+    if (started < 0) return started;   // -2: replay has not started yet; -1: no warm-up is needed
+    return ((jlong)done << 32) | (uint32_t)total;
 }
 
 // the drawer's frame generation: the live switch and the status line ("<state> <reason>", Banana's format)

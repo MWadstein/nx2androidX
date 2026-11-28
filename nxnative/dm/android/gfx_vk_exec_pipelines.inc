@@ -135,31 +135,39 @@ static void pipe_record(const pkey *k) {   // (under g_pipe_mu: only queued here
     if (g_precq_n < PREC_Q) g_precq[g_precq_n++] = *k;   // (a full queue drops the record: that pipeline is only not prewarmed next time)
     pthread_cond_signal(&g_precq_cv); pthread_mutex_unlock(&g_precq_mu);
 }
-static pkey *g_pw; static size_t g_pw_n; static volatile size_t g_pw_next, g_pw_done;
+static pkey *g_pw; static size_t g_pw_n; static volatile size_t g_pw_next, g_pw_done; static int g_pw_started;
+static void prewarm_progress(void) {
+    size_t d = __atomic_add_fetch(&g_pw_done, 1, __ATOMIC_RELAXED);
+    if (d == g_pw_n || d % 500 == 0) VKLOG("prewarm: %zu of %zu pipelines", d, g_pw_n);
+}
 static void *prewarm_thread(void *arg) {
     (void)arg; pthread_setname_np(pthread_self(), "vk prewarm");
     setpriority(PRIO_PROCESS, 0, 10);   // below the game's threads: prewarm uses idle cores
     for (;;) {
         size_t i = __atomic_fetch_add(&g_pw_next, 1, __ATOMIC_RELAXED); if (i >= g_pw_n) break;
         const pkey *k = &g_pw[i];
-        pthread_mutex_lock(&g_pipe_mu); int have = nvn_hm_get(&g_pipes, k) != NULL; pthread_mutex_unlock(&g_pipe_mu);
-        if (have) continue;
-        vkshader_t *stg[3] = {0}; int ok = 1;
-        for (int s = 0; s < 3; s++) if (k->key[s] && !(s == 1 && k->raster_discard)) { stg[s] = vk_shader(k->key[s], s); if (!stg[s]) ok = 0; }
-        if (!ok || !stg[0]) continue;
-        VkDescriptorSetLayout dsl[5] = {0}; int nsets = 0;
-        for (int s = 0; s < 3; s++) if (stg[s]) { dsl[stg[s]->set] = stg[s]->dsl; if (stg[s]->set + 1 > nsets) nsets = stg[s]->set + 1; }
-        VkPipeline p = build_pipeline(k, vk_pipeline_layout(dsl, nsets), stg);
-        pthread_mutex_lock(&g_pipe_mu);
-        if (!nvn_hm_get(&g_pipes, k)) nvn_hm_put(&g_pipes, k, p); else if (p != (void *)1) vkDestroyPipeline(V.dev, p, NULL);
-        pthread_mutex_unlock(&g_pipe_mu);
-        size_t d = __atomic_add_fetch(&g_pw_done, 1, __ATOMIC_RELAXED);
-        if (d == g_pw_n || d % 500 == 0) VKLOG("prewarm: %zu of %zu pipelines", d, g_pw_n);
+        pthread_mutex_lock(&g_pipe_mu); VkPipeline have = nvn_hm_get(&g_pipes, k); pthread_mutex_unlock(&g_pipe_mu);
+        // PIPE_PENDING is only an async queue marker. Build it here too; the async worker later drops its duplicate.
+        if (!have || have == PIPE_PENDING) {
+            vkshader_t *stg[3] = {0}; int ok = 1;
+            for (int s = 0; s < 3; s++) if (k->key[s] && !(s == 1 && k->raster_discard)) { stg[s] = vk_shader(k->key[s], s); if (!stg[s]) ok = 0; }
+            if (ok && stg[0]) {
+                VkDescriptorSetLayout dsl[5] = {0}; int nsets = 0;
+                for (int s = 0; s < 3; s++) if (stg[s]) { dsl[stg[s]->set] = stg[s]->dsl; if (stg[s]->set + 1 > nsets) nsets = stg[s]->set + 1; }
+                VkPipeline p = build_pipeline(k, vk_pipeline_layout(dsl, nsets), stg);
+                pthread_mutex_lock(&g_pipe_mu);
+                VkPipeline had = nvn_hm_get(&g_pipes, k);
+                if (had && had != PIPE_PENDING) { if (p != (void *)1) vkDestroyPipeline(V.dev, p, NULL); }
+                else nvn_hm_put(&g_pipes, k, p);   // already recorded: prewarm must not append it again
+                pthread_mutex_unlock(&g_pipe_mu);
+            }
+        }
+        prewarm_progress();   // cached, rejected and newly built records all complete exactly once
     }
     return NULL;
 }
-static void prewarm_start(void) {
-    const char *root = getenv("DM_ROOT"); if (!root) return;
+static void prewarm_start_once(void) {
+    const char *root = getenv("DM_ROOT"); if (!root) { __atomic_store_n(&g_pw_started, -1, __ATOMIC_RELEASE); return; }
     char path[1024]; snprintf(path, sizeof path, "%s/vk_pipelines.bin", root);
     uint32_t hdr[PIPE_HDR_WORDS] = {PIPE_MAGIC, (uint32_t)sizeof(pkey)}, fh[PIPE_HDR_WORDS] = {0};
     vk_cache_identity((uint8_t *)&hdr[2]);
@@ -171,10 +179,25 @@ static void prewarm_start(void) {
     if (f) fclose(f);
     // rewrite the file with the records read (dropping a torn last record), then append to it
     g_prec = fopen(path, "wb"); if (g_prec) { fwrite(hdr, sizeof hdr, 1, g_prec); if (g_pw_n) fwrite(g_pw, sizeof(pkey), g_pw_n, g_prec); fflush(g_prec); }
-    if (!g_pw_n || getenv("DM_VK_NOPREWARM")) { VKLOG("prewarm: %zu pipelines recorded%s", g_pw_n, g_pw_n ? ", off (DM_VK_NOPREWARM)" : ""); return; }
+    if (!g_pw_n || getenv("DM_VK_NOPREWARM")) {
+        __atomic_store_n(&g_pw_started, -1, __ATOMIC_RELEASE);
+        VKLOG("prewarm: %zu pipelines recorded%s", g_pw_n, g_pw_n ? ", off (DM_VK_NOPREWARM)" : "");
+        return;
+    }
     long nc = sysconf(_SC_NPROCESSORS_ONLN); int nt = nc >= 8 ? 3 : nc >= 4 ? 2 : 1;
     VKLOG("prewarm: %zu recorded pipelines on %d threads", g_pw_n, nt);
-    for (int i = 0; i < nt; i++) { pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED); pthread_create(&t, &a, prewarm_thread, NULL); pthread_attr_destroy(&a); }
+    int created = 0;
+    for (int i = 0; i < nt; i++) {
+        pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+        if (!pthread_create(&t, &a, prewarm_thread, NULL)) created++;
+        pthread_attr_destroy(&a);
+    }
+    __atomic_store_n(&g_pw_started, created ? 1 : -1, __ATOMIC_RELEASE);
+    if (!created) VKLOG("prewarm: no worker could be started; continuing without warm-up");
+}
+static void prewarm_start(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, prewarm_start_once);
 }
 // ---- what each thread is building, for the crash dump. Issue #64: Super Mario Bros. Wonder crashed in the Adreno 750's shader compiler (libllvm-qgl.so, driver 512.762)
 // at its title scene, with no log line to say which pipeline or which thread; and a pipeline that crashes is never recorded for the prewarm, so every run met it again.

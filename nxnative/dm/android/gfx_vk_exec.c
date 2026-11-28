@@ -29,3 +29,13 @@ int prog_key(const prog_t *p, unsigned st, uint8_t key[8]);
 #include "gfx_vk_exec_xfb.inc"   // transform feedback and the geometry-shader split
 #include "gfx_vk_exec_copies.inc"   // copies and clears
 #include "gfx_vk_exec_walker.inc"   // the record walker: the switch over recorded NVN commands, x_read, the profiler
+
+// The app only polls: replay starts warm-up after the game's main module is loaded, so cache identity cannot be
+// captured from an empty module table. -2 means replay has not reached that point yet; -1 means no warm-up is needed.
+int vk_prewarm_status(int *done, int *total) {
+    int started = __atomic_load_n(&g_pw_started, __ATOMIC_ACQUIRE);
+    if (started <= 0) return started == 0 ? -2 : -1;
+    *done = (int)__atomic_load_n(&g_pw_done, __ATOMIC_RELAXED);
+    *total = (int)g_pw_n;
+    return 1;
+}
