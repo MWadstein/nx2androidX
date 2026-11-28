@@ -251,6 +251,8 @@
     <string name="drawer_audio_unsupported">这个包的运行库还没有选声音输出的开关 —— 更新运行库后就有。</string>
     <string name="drawer_group_info">画面信息</string>
     <string name="drawer_group_rate">帧率</string>
+    <string name="drawer_max_performance">极限性能</string>
+    <string name="drawer_max_performance_hint">让 GPU 始终最高频，不改变帧率设置。更耗电、更热；设备温度与功耗限制仍然生效。</string>
     <string name="drawer_group_picture">画面</string>
     <string name="drawer_rate_row">帧率档位</string>
     <string name="drawer_rate_hint">游戏帧率常在 30–60 之间来回跳时，试试钉在 60；觉得游戏跑得太快时，改用 30。游戏自身限 30 的仍是 30。</string>

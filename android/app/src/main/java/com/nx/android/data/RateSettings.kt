@@ -19,8 +19,8 @@ data class RatePin(val fps: Int) {
 }
 
 /**
- * 一个游戏的帧率档位：prefs 壳（按 Title ID 的键）。
- * 键不存在 = 玩家没选过：档案自己的默认（android.tsv 的 DM_FPS_PIN）继续说话。
+ * 一个游戏的性能偏好：帧率档位与 GPU 提频，prefs 壳（按 Title ID 的键）。
+ * 键不存在 = 玩家没选过：档案自己的默认（android.tsv 的 DM_FPS_PIN / DM_GPU_TURBO）继续说话。
  */
 class RateSettings(private val prefs: PrefsStore, private val titleId: String) {
 
@@ -31,5 +31,17 @@ class RateSettings(private val prefs: PrefsStore, private val titleId: String) {
 
     fun save(pin: RatePin) {
         if (RatePin.valid(pin.fps)) prefs.put("$base.pin", pin.fps.toString())
+    }
+
+    /** 玩家选的 GPU 时钟；null = 没选过（档案的默认继续生效） */
+    fun loadTurbo(): String? = prefs.str("$base.turbo").takeIf { validTurbo(it) }
+
+    fun saveTurbo(mode: String) {
+        if (validTurbo(mode)) prefs.put("$base.turbo", mode)
+    }
+
+    companion object {
+        /** 抽屉里能持久化的三档：关 / 一直最高 / 掉帧时 */
+        fun validTurbo(mode: String) = mode == "0" || mode == "1" || mode == "auto"
     }
 }

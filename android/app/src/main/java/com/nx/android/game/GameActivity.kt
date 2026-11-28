@@ -746,9 +746,10 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         pushPadMapping()
         // 外接屏：宿主能接第二个窗口吗（老包没有那个能力位，这个模式对它没有意义）
         setupExternalDisplay()
-        // 玩家选的帧率档位：start 之后才下发——包的 env.txt 在宿主启动时读过，晚 setenv 的那份留下来，
-        // 玩家的选择盖过档案自己的 DM_FPS_PIN。没选过就不下发，档案的默认继续说话。
+        // 玩家选的性能偏好：start 之后才下发——包的 env.txt 在宿主启动时读过，晚 setenv 的那份留下来，
+        // 玩家的选择盖过档案自己的 DM_FPS_PIN / DM_GPU_TURBO。没选过就不下发，档案的默认继续说话。
         rateSettings?.load()?.let { pin -> runCatching { Native.perfPinSet(pin.fps) } }
+        rateSettings?.loadTurbo()?.let { mode -> runCatching { Native.gpuTurboSet(mode) } }
         // 金手指页的状态：宿主起来了才知道这个 build 的编号（下载过的文件在不在、出处）
         refreshCheatStatus()
         awaitCheatBuild()
@@ -1019,6 +1020,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         runCatching { Native.perfPinSet(pin.fps) }
     }
 
+    /** GPU 时钟：App 的偏好按游戏记着，运行中的副本即时生效（宿主每 60 个 present 重读一次）。 */
+    private fun saveGpuTurbo(mode: String) {
+        rateSettings?.saveTurbo(mode)
+        runCatching { Native.gpuTurboSet(mode) }
+    }
+
     /** 宿主现在的体感开关（位 1 = 体感开着，位 2 = 保留甩动方向）：宿主是唯一真源 */
     private fun motionState(): Int =
         runCatching { Native.motionGet() }.getOrDefault(0)
@@ -1119,6 +1126,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 onOpenChange = { if (it) openDrawer() else drawerOpen = false },
                 settings = fgSettings,
                 onRatePin = { saveRatePin(it) },
+                onGpuTurbo = { saveGpuTurbo(it) },
                 motion = { motionState() },
                 motionHasGyro = hasGyroscope(this@GameActivity),
                 onMotion = { on, raw -> saveMotion(on, raw) },

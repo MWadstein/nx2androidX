@@ -24,4 +24,13 @@ class RatePinTest {
         assertEquals(3, RatePin.indexOf(30))
         assertEquals(-1, RatePin.indexOf(50))   // 宿主不认得的档位：自由自适应
     }
+
+    @Test
+    fun `only the drawer's GPU clock modes persist`() {
+        assertTrue(RateSettings.validTurbo("0"))
+        assertTrue(RateSettings.validTurbo("1"))
+        assertTrue(RateSettings.validTurbo("auto"))
+        assertFalse(RateSettings.validTurbo(""))
+        assertFalse(RateSettings.validTurbo("need"))
+    }
 }

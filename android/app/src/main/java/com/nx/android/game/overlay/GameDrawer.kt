@@ -146,6 +146,7 @@ fun GameDrawer(
     onOpenChange: (Boolean) -> Unit,
     settings: FrameGenSettings?,
     onRatePin: (RatePin) -> Unit,
+    onGpuTurbo: (String) -> Unit,
     motion: () -> Int,
     motionHasGyro: Boolean,
     onMotion: (Boolean, Boolean) -> Unit,
@@ -262,9 +263,9 @@ fun GameDrawer(
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 when (DrawerTab.entries[tab]) {
-                                    // 性能页：帧率档位、GPU 提频与底座模式（都是性能取舍，与帧生成无关）
-                                    DrawerTab.PERF -> PerfRows(ratePin, onRatePin, rateSupported,
-                                        turboSupported, turboMode, { mode -> turboMode = mode; Native.gpuTurboSet(mode) })
+                                    // 性能页：极限性能、帧率档位、GPU 提频与底座模式（都是性能取舍，与帧生成无关）
+                                    DrawerTab.PERF -> PerfRows(ratePin, { pin -> ratePin = pin.fps; onRatePin(pin) }, rateSupported,
+                                        turboSupported, turboMode, { mode -> turboMode = mode; onGpuTurbo(mode) })
                                     DrawerTab.HUD -> HudRows(hudStats, onHudStats, hudDevice, onHudDevice,
                                         hudFields, onHudFields, hudFahrenheit, onHudFahrenheit)
                                     DrawerTab.FRAMEGEN -> if (settings == null) HintRow(stringResource(R.string.drawer_no_framegen))
@@ -549,6 +550,21 @@ private fun HudRows(
 @Composable
 private fun PerfRows(pin: Int, onPick: (RatePin) -> Unit, rateSupported: Boolean,
                       turboSupported: Boolean, turboMode: String, onTurbo: (String) -> Unit) {
+    // GPU 最高频的一键开关；帧率档位完全由玩家单独选择，预设不碰它。
+    if (turboSupported) {
+        val maxPerformance = GpuTurbo.normalize(turboMode) == GpuTurbo.ON
+        ToggleRow(
+            Icons.Filled.Bolt,
+            stringResource(R.string.drawer_max_performance),
+            stringResource(R.string.drawer_max_performance_hint),
+            maxPerformance,
+        ) { on ->
+            val mode = if (on) GpuTurbo.ON else GpuTurbo.OFF
+            onTurbo(mode)
+        }
+        Spacer(Modifier.height(4.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    }
     if (rateSupported) {
         GroupLabel(stringResource(R.string.drawer_group_rate))
         // 选项的词先取好：回调里不能取词
